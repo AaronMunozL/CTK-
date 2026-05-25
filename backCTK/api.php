@@ -7,7 +7,6 @@ header("Content-Type: application/json; charset=utf-8");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
-    echo json_encode(["ok" => true]);
     exit;
 }
 
@@ -101,6 +100,23 @@ function responseError($message, $code = 400, $extra = null)
     echo json_encode($payload);
     exit;
 }
+function generarCodigoMesaUnico(PDO $pdo)
+{
+    do {
+        $codigo = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+        $stmt = $pdo->prepare("
+            SELECT id
+            FROM mesa
+            WHERE codigo_acceso = ? AND codigo_activo = 1
+            LIMIT 1
+        ");
+        $stmt->execute([$codigo]);
+        $existe = $stmt->fetch();
+    } while ($existe);
+
+    return $codigo;
+}
 
 try {
     if ($entity === 'auth' && $action === 'login') {
@@ -161,6 +177,70 @@ try {
         ]);
     }
 
+    if ($entity === 'mesas' && $action === 'cerrar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, estado
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$id]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('Mesa no encontrada', 404);
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $stmtHistorico = $pdo->prepare("
+            UPDATE historico_mesa
+            SET fecha_cierre = NOW()
+            WHERE mesa_id = ?
+              AND fecha_cierre IS NULL
+        ");
+            $stmtHistorico->execute([$id]);
+
+            $stmtDeletePedidos = $pdo->prepare("
+            DELETE FROM pedido
+            WHERE mesa_id = ?
+        ");
+            $stmtDeletePedidos->execute([$id]);
+
+            $stmtMesaCerrar = $pdo->prepare("
+            UPDATE mesa
+            SET
+                estado = 'libre',
+                num_comensales = 0,
+                menu_id = NULL,
+                codigo_acceso = NULL,
+                codigo_activo = 0,
+                codigo_generado_at = NULL
+            WHERE id = ?
+        ");
+            $stmtMesaCerrar->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Mesa cerrada correctamente y pedidos eliminados'
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al cerrar la mesa', 500, $e->getMessage());
+        }
+    }
     if ($entity === 'usuarios' && $action === 'listar') {
         $stmt = $pdo->prepare("
             SELECT
@@ -312,7 +392,10 @@ try {
             capacidad,
             num_comensales AS numComensales,
             menu_id AS menuId,
-            estado
+            estado,
+            codigo_acceso AS codigoAcceso,
+            codigo_activo AS codigoActivo,
+            codigo_generado_at AS codigoGeneradoAt
         FROM mesa
         ORDER BY numero ASC
     ");
@@ -322,7 +405,6 @@ try {
             'mesas' => $stmt->fetchAll()
         ]);
     }
-
     if ($entity === 'mesas' && $action === 'crear') {
         $numero = $input['numero'] ?? null;
         $capacidad = $input['capacidad'] ?? null;
@@ -354,8 +436,17 @@ try {
         }
 
         $stmt = $pdo->prepare("
-        INSERT INTO mesa (numero, capacidad, num_comensales, menu_id, estado)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO mesa (
+            numero,
+            capacidad,
+            num_comensales,
+            menu_id,
+            estado,
+            codigo_acceso,
+            codigo_activo,
+            codigo_generado_at
+        )
+        VALUES (?, ?, ?, ?, ?, NULL, 0, NULL)
     ");
         $stmt->execute([$numero, $capacidad, $numComensales, $menuId, $estado]);
 
@@ -409,6 +500,7 @@ try {
         ]);
     }
 
+
     if ($entity === 'mesas' && $action === 'validar-codigo') {
         $codigo = trim($input['codigo'] ?? '');
 
@@ -416,8 +508,8 @@ try {
             responseError('Debes introducir un código');
         }
 
-        if (!ctype_digit($codigo)) {
-            responseError('El código debe ser numérico');
+        if (!preg_match('/^\d{6}$/', $codigo)) {
+            responseError('El código debe tener 6 dígitos');
         }
 
         $stmt = $pdo->prepare("
@@ -427,16 +519,19 @@ try {
             capacidad,
             num_comensales AS numComensales,
             menu_id AS menuId,
-            estado
+            estado,
+            codigo_acceso AS codigoAcceso,
+            codigo_activo AS codigoActivo,
+            codigo_generado_at AS codigoGeneradoAt
         FROM mesa
-        WHERE numero = ?
+        WHERE codigo_acceso = ? AND codigo_activo = 1
         LIMIT 1
     ");
-        $stmt->execute([(int)$codigo]);
+        $stmt->execute([$codigo]);
         $mesa = $stmt->fetch();
 
         if (!$mesa) {
-            responseError('Mesa no encontrada', 404);
+            responseError('Código de mesa no válido', 404);
         }
 
         if ($mesa['estado'] === 'mantenimiento') {
@@ -446,6 +541,84 @@ try {
         responseOk([
             'ok' => true,
             'mesa' => $mesa
+        ]);
+    }
+
+    if ($entity === 'mesas' && $action === 'generar-codigo') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, numero, estado
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$id]);
+        $mesa = $stmtMesa->fetch();
+
+        if (!$mesa) {
+            responseError('Mesa no encontrada', 404);
+        }
+
+        if ($mesa['estado'] === 'mantenimiento') {
+            responseError('No se puede generar código para una mesa en mantenimiento');
+        }
+
+        $codigo = generarCodigoMesaUnico($pdo);
+
+        $stmt = $pdo->prepare("
+        UPDATE mesa
+        SET codigo_acceso = ?, codigo_activo = 1, codigo_generado_at = NOW()
+        WHERE id = ?
+    ");
+        $stmt->execute([$codigo, $id]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Código generado correctamente',
+            'mesa' => [
+                'id' => (int) $mesa['id'],
+                'numero' => $mesa['numero'],
+                'codigoAcceso' => $codigo,
+                'codigoActivo' => 1
+            ]
+        ]);
+    }
+
+    if ($entity === 'mesas' && $action === 'resetear-codigo') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$id]);
+        $mesa = $stmtMesa->fetch();
+
+        if (!$mesa) {
+            responseError('Mesa no encontrada', 404);
+        }
+
+        $stmt = $pdo->prepare("
+        UPDATE mesa
+        SET codigo_acceso = NULL, codigo_activo = 0, codigo_generado_at = NULL
+        WHERE id = ?
+    ");
+        $stmt->execute([$id]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Código reseteado correctamente'
         ]);
     }
 
@@ -569,60 +742,60 @@ try {
         ]);
     }
     if ($entity === 'alergenos' && $action === 'listar') {
-    $stmt = $pdo->prepare("
+        $stmt = $pdo->prepare("
         SELECT id, nombre, icono
         FROM alergeno
         ORDER BY nombre ASC
     ");
-    $stmt->execute();
+        $stmt->execute();
 
-    responseOk(['alergenos' => $stmt->fetchAll()]);
-}
-
-if ($entity === 'alergenos' && $action === 'crear') {
-    $nombre = trim($input['nombre'] ?? '');
-    $icono = trim($input['icono'] ?? '');
-
-    if ($nombre === '') {
-        responseError('El nombre es obligatorio');
+        responseOk(['alergenos' => $stmt->fetchAll()]);
     }
 
-    $stmt = $pdo->prepare("
+    if ($entity === 'alergenos' && $action === 'crear') {
+        $nombre = trim($input['nombre'] ?? '');
+        $icono = trim($input['icono'] ?? '');
+
+        if ($nombre === '') {
+            responseError('El nombre es obligatorio');
+        }
+
+        $stmt = $pdo->prepare("
         INSERT INTO alergeno (nombre, icono)
         VALUES (?, ?)
     ");
-    $stmt->execute([$nombre, $icono !== '' ? $icono : null]);
+        $stmt->execute([$nombre, $icono !== '' ? $icono : null]);
 
-    responseOk([
-        'ok' => true,
-        'message' => 'Alérgeno creado correctamente'
-    ]);
-}
-
-if ($entity === 'alergenos' && $action === 'actualizar') {
-    $id = $input['id'] ?? null;
-    $nombre = trim($input['nombre'] ?? '');
-    $icono = trim($input['icono'] ?? '');
-
-    if (!$id || $nombre === '') {
-        responseError('Faltan datos obligatorios');
+        responseOk([
+            'ok' => true,
+            'message' => 'Alérgeno creado correctamente'
+        ]);
     }
 
-    $stmt = $pdo->prepare("
+    if ($entity === 'alergenos' && $action === 'actualizar') {
+        $id = $input['id'] ?? null;
+        $nombre = trim($input['nombre'] ?? '');
+        $icono = trim($input['icono'] ?? '');
+
+        if (!$id || $nombre === '') {
+            responseError('Faltan datos obligatorios');
+        }
+
+        $stmt = $pdo->prepare("
         UPDATE alergeno
         SET nombre = ?, icono = ?
         WHERE id = ?
     ");
-    $stmt->execute([$nombre, $icono !== '' ? $icono : null, $id]);
+        $stmt->execute([$nombre, $icono !== '' ? $icono : null, $id]);
 
-    responseOk([
-        'ok' => true,
-        'message' => 'Alérgeno actualizado correctamente'
-    ]);
-}
+        responseOk([
+            'ok' => true,
+            'message' => 'Alérgeno actualizado correctamente'
+        ]);
+    }
 
-if ($entity === 'productos' && $action === 'listar') {
-    $stmt = $pdo->prepare("
+    if ($entity === 'productos' && $action === 'listar') {
+        $stmt = $pdo->prepare("
         SELECT
             p.id,
             p.nombre,
@@ -635,121 +808,1131 @@ if ($entity === 'productos' && $action === 'listar') {
         INNER JOIN categoria c ON c.id = p.categoria_id
         ORDER BY p.id DESC
     ");
-    $stmt->execute();
-    $productos = $stmt->fetchAll();
+        $stmt->execute();
+        $productos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    foreach ($productos as &$producto) {
         $stmtAlergenos = $pdo->prepare("
-            SELECT a.id, a.nombre
-            FROM producto_alergeno pa
-            INNER JOIN alergeno a ON a.id = pa.alergeno_id
-            WHERE pa.producto_id = ?
-            ORDER BY a.nombre ASC
-        ");
-        $stmtAlergenos->execute([$producto['id']]);
-        $producto['alergenos'] = $stmtAlergenos->fetchAll();
-    }
-
-    responseOk(['productos' => $productos]);
-}
-
-if ($entity === 'productos' && $action === 'crear') {
-    $nombre = trim($input['nombre'] ?? '');
-    $imagen = trim($input['imagen'] ?? '');
-    $categoriaId = $input['categoriaId'] ?? null;
-    $disponible = isset($input['disponible']) && $input['disponible'] ? 1 : 0;
-    $precio = $input['precio'] ?? null;
-    $alergenos = is_array($input['alergenos'] ?? null) ? $input['alergenos'] : [];
-
-    if ($nombre === '' || !$categoriaId || $precio === null || $precio === '') {
-        responseError('Faltan datos obligatorios');
-    }
-
-    $pdo->beginTransaction();
-
-    $stmt = $pdo->prepare("
-        INSERT INTO producto (nombre, imagen, categoria_id, disponible, precio)
-        VALUES (?, ?, ?, ?, ?)
+        SELECT a.id, a.nombre
+        FROM producto_alergeno pa
+        INNER JOIN alergeno a ON a.id = pa.alergeno_id
+        WHERE pa.producto_id = ?
+        ORDER BY a.nombre ASC
     ");
-    $stmt->execute([
-        $nombre,
-        $imagen !== '' ? $imagen : null,
-        $categoriaId,
-        $disponible,
-        $precio
-    ]);
 
-    $productoId = $pdo->lastInsertId();
+        $stmtMenus = $pdo->prepare("
+        SELECT m.id, m.nombre
+        FROM producto_menu pm
+        INNER JOIN menu m ON m.id = pm.menu_id
+        WHERE pm.producto_id = ?
+        ORDER BY m.nombre ASC
+    ");
 
-    if (!empty($alergenos)) {
-        $stmtAlergeno = $pdo->prepare("
-            INSERT INTO producto_alergeno (producto_id, alergeno_id)
-            VALUES (?, ?)
+        foreach ($productos as &$producto) {
+            $stmtAlergenos->execute([$producto['id']]);
+            $producto['alergenos'] = $stmtAlergenos->fetchAll(PDO::FETCH_ASSOC);
+
+            $stmtMenus->execute([$producto['id']]);
+            $menus = $stmtMenus->fetchAll(PDO::FETCH_ASSOC);
+
+            $producto['menus'] = $menus;
+            $producto['menuIds'] = array_map(fn($m) => (int)$m['id'], $menus);
+            $producto['menuNombres'] = array_map(fn($m) => $m['nombre'], $menus);
+        }
+
+        responseOk([
+            'ok' => true,
+            'productos' => $productos
+        ]);
+    }
+
+    if ($entity === 'productos' && $action === 'crear') {
+        $nombre = trim($input['nombre'] ?? '');
+        $imagen = trim($input['imagen'] ?? '');
+        $categoriaId = $input['categoriaId'] ?? null;
+        $disponible = isset($input['disponible']) && $input['disponible'] ? 1 : 0;
+        $precio = $input['precio'] ?? null;
+        $alergenos = is_array($input['alergenos'] ?? null) ? $input['alergenos'] : [];
+        $menus = is_array($input['menus'] ?? null) ? $input['menus'] : [];
+
+        if ($nombre === '' || !$categoriaId || $precio === null || $precio === '') {
+            responseError('Faltan datos obligatorios');
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $stmt = $pdo->prepare("
+            INSERT INTO producto (nombre, imagen, categoria_id, disponible, precio)
+            VALUES (?, ?, ?, ?, ?)
         ");
+            $stmt->execute([
+                $nombre,
+                $imagen !== '' ? $imagen : null,
+                $categoriaId,
+                $disponible,
+                $precio
+            ]);
 
-        foreach ($alergenos as $alergenoId) {
-            $stmtAlergeno->execute([$productoId, $alergenoId]);
+            $productoId = (int)$pdo->lastInsertId();
+
+            if (!empty($alergenos)) {
+                $stmtAlergeno = $pdo->prepare("
+                INSERT INTO producto_alergeno (producto_id, alergeno_id)
+                VALUES (?, ?)
+            ");
+
+                foreach ($alergenos as $alergenoId) {
+                    $stmtAlergeno->execute([$productoId, (int)$alergenoId]);
+                }
+            }
+
+            if (!empty($menus)) {
+                $stmtMenu = $pdo->prepare("
+                INSERT INTO producto_menu (producto_id, menu_id)
+                VALUES (?, ?)
+            ");
+
+                foreach ($menus as $menuId) {
+                    $stmtMenu->execute([$productoId, (int)$menuId]);
+                }
+            }
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Producto creado correctamente'
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al crear el producto', 500, $e->getMessage());
         }
     }
 
-    $pdo->commit();
+    if ($entity === 'productos' && $action === 'actualizar') {
+        $id = $input['id'] ?? null;
+        $nombre = trim($input['nombre'] ?? '');
+        $imagen = trim($input['imagen'] ?? '');
+        $categoriaId = $input['categoriaId'] ?? null;
+        $disponible = isset($input['disponible']) && $input['disponible'] ? 1 : 0;
+        $precio = $input['precio'] ?? null;
+        $alergenos = is_array($input['alergenos'] ?? null) ? $input['alergenos'] : [];
+        $menus = is_array($input['menus'] ?? null) ? $input['menus'] : [];
 
-    responseOk([
-        'ok' => true,
-        'message' => 'Producto creado correctamente'
-    ]);
-}
+        if (!$id || $nombre === '' || !$categoriaId || $precio === null || $precio === '') {
+            responseError('Faltan datos obligatorios');
+        }
 
-if ($entity === 'productos' && $action === 'actualizar') {
-    $id = $input['id'] ?? null;
-    $nombre = trim($input['nombre'] ?? '');
-    $imagen = trim($input['imagen'] ?? '');
-    $categoriaId = $input['categoriaId'] ?? null;
-    $disponible = isset($input['disponible']) && $input['disponible'] ? 1 : 0;
-    $precio = $input['precio'] ?? null;
-    $alergenos = is_array($input['alergenos'] ?? null) ? $input['alergenos'] : [];
+        $pdo->beginTransaction();
 
-    if (!$id || $nombre === '' || !$categoriaId || $precio === null || $precio === '') {
-        responseError('Faltan datos obligatorios');
+        try {
+            $stmt = $pdo->prepare("
+            UPDATE producto
+            SET nombre = ?, imagen = ?, categoria_id = ?, disponible = ?, precio = ?
+            WHERE id = ?
+        ");
+            $stmt->execute([
+                $nombre,
+                $imagen !== '' ? $imagen : null,
+                $categoriaId,
+                $disponible,
+                $precio,
+                $id
+            ]);
+
+            $stmtDeleteAlergenos = $pdo->prepare("
+            DELETE FROM producto_alergeno
+            WHERE producto_id = ?
+        ");
+            $stmtDeleteAlergenos->execute([$id]);
+
+            if (!empty($alergenos)) {
+                $stmtAlergeno = $pdo->prepare("
+                INSERT INTO producto_alergeno (producto_id, alergeno_id)
+                VALUES (?, ?)
+            ");
+
+                foreach ($alergenos as $alergenoId) {
+                    $stmtAlergeno->execute([(int)$id, (int)$alergenoId]);
+                }
+            }
+
+            $stmtDeleteMenus = $pdo->prepare("
+            DELETE FROM producto_menu
+            WHERE producto_id = ?
+        ");
+            $stmtDeleteMenus->execute([$id]);
+
+            if (!empty($menus)) {
+                $stmtMenu = $pdo->prepare("
+                INSERT INTO producto_menu (producto_id, menu_id)
+                VALUES (?, ?)
+            ");
+
+                foreach ($menus as $menuId) {
+                    $stmtMenu->execute([(int)$id, (int)$menuId]);
+                }
+            }
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Producto actualizado correctamente'
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al actualizar el producto', 500, $e->getMessage());
+        }
     }
 
-    $pdo->beginTransaction();
+    if ($entity === 'cocina' && $action === 'listar_pedidos') {
+        $stmt = $pdo->prepare("
+        SELECT
+            p.id,
+            p.mesa_id,
+            m.numero AS mesa_numero,
+            p.estado,
+            p.created_at,
+            p.updated_at
+        FROM pedido p
+        INNER JOIN mesa m ON m.id = p.mesa_id
+        ORDER BY
+            CASE p.estado
+                WHEN 'pendiente' THEN 1
+                WHEN 'en preparacion' THEN 2
+                WHEN 'listo' THEN 3
+                ELSE 4
+            END,
+            p.created_at ASC
+    ");
+        $stmt->execute();
+        $pedidos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $stmt = $pdo->prepare("
-        UPDATE producto
-        SET nombre = ?, imagen = ?, categoria_id = ?, disponible = ?, precio = ?
+        $stmtLineas = $pdo->prepare("
+        SELECT
+            lp.id,
+            lp.pedido_id,
+            lp.producto_id,
+            pr.nombre AS producto_nombre,
+            lp.cantidad,
+            lp.precio_unitario,
+            lp.estado,
+            lp.observaciones
+        FROM linea_pedido lp
+        INNER JOIN producto pr ON pr.id = lp.producto_id
+        WHERE lp.pedido_id = ?
+        ORDER BY lp.id ASC
+    ");
+
+        foreach ($pedidos as &$pedido) {
+            $stmtLineas->execute([$pedido['id']]);
+            $lineas = $stmtLineas->fetchAll(PDO::FETCH_ASSOC);
+
+            $pedido['mesaNumero'] = $pedido['mesa_numero'];
+            $pedido['createdAt'] = $pedido['created_at'];
+            $pedido['updatedAt'] = $pedido['updated_at'];
+            $pedido['lineas'] = array_map(function ($linea) {
+                return [
+                    'id' => (int)$linea['id'],
+                    'pedidoId' => (int)$linea['pedido_id'],
+                    'productoId' => (int)$linea['producto_id'],
+                    'productoNombre' => $linea['producto_nombre'],
+                    'cantidad' => (int)$linea['cantidad'],
+                    'precioUnitario' => (float)$linea['precio_unitario'],
+                    'estado' => $linea['estado'],
+                    'observaciones' => $linea['observaciones'],
+                ];
+            }, $lineas);
+
+            unset(
+                $pedido['mesa_id'],
+                $pedido['mesa_numero'],
+                $pedido['created_at'],
+                $pedido['updated_at']
+            );
+        }
+
+        responseOk([
+            'ok' => true,
+            'pedidos' => $pedidos
+        ]);
+    }
+
+    if ($entity === 'pedidos' && $action === 'crear') {
+        $mesaId = $input['mesaId'] ?? null;
+        $productos = is_array($input['productos'] ?? null) ? $input['productos'] : [];
+        $notas = trim($input['notas'] ?? '');
+
+        if (!$mesaId || empty($productos)) {
+            responseError('Faltan datos para crear el pedido');
+        }
+
+        $mesaId = (int)$mesaId;
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, menu_id, num_comensales, estado
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$mesaId]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('La mesa no existe');
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $usuarioId = 1;
+
+            $stmtPedido = $pdo->prepare("
+            INSERT INTO pedido (mesa_id, usuario_id, estado, created_at, updated_at)
+            VALUES (?, ?, 'pendiente', NOW(), NOW())
+        ");
+            $stmtPedido->execute([$mesaId, $usuarioId]);
+
+            $pedidoId = (int)$pdo->lastInsertId();
+
+            $stmtLinea = $pdo->prepare("
+            INSERT INTO linea_pedido (pedido_id, producto_id, cantidad, precio_unitario, estado, observaciones)
+            VALUES (?, ?, ?, ?, 'pendiente', ?)
+        ");
+
+            $totalProductos = 0.0;
+
+            foreach ($productos as $producto) {
+                $productoId = $producto['productoId'] ?? null;
+                $cantidad = isset($producto['cantidad']) ? (int)$producto['cantidad'] : 0;
+                $precio = $producto['precio'] ?? null;
+
+                if (!$productoId || $cantidad <= 0 || $precio === null || $precio === '') {
+                    throw new Exception('Línea de pedido inválida');
+                }
+
+                $productoId = (int)$productoId;
+                $precio = (float)$precio;
+                $subtotal = $precio * $cantidad;
+                $totalProductos += $subtotal;
+
+                $stmtLinea->execute([
+                    $pedidoId,
+                    $productoId,
+                    $cantidad,
+                    $precio,
+                    $notas !== '' ? $notas : null
+                ]);
+            }
+
+            $costeMenu = 0.0;
+            $numComensales = max(0, (int)$mesa['num_comensales']);
+            $totalMenu = 0.0;
+
+            if (!empty($mesa['menu_id'])) {
+                $stmtMenu = $pdo->prepare("
+                SELECT coste
+                FROM menu
+                WHERE id = ?
+                LIMIT 1
+            ");
+                $stmtMenu->execute([(int)$mesa['menu_id']]);
+                $menu = $stmtMenu->fetch(PDO::FETCH_ASSOC);
+
+                if ($menu) {
+                    $costeMenu = (float)$menu['coste'];
+                    $totalMenu = $costeMenu * $numComensales;
+                }
+            }
+
+            $totalFacturado = $totalProductos;
+
+            $stmtEstadoMesa = $pdo->prepare("
+            UPDATE mesa
+            SET estado = 'ocupada'
+            WHERE id = ?
+        ");
+            $stmtEstadoMesa->execute([$mesaId]);
+
+            $stmtHistorico = $pdo->prepare("
+            INSERT INTO historico_mesa (
+                mesa_id,
+                num_comensales,
+                menu_id,
+                pedido_id,
+                fecha_apertura,
+                total_facturado
+            ) VALUES (?, ?, ?, ?, NOW(), ?)
+        ");
+            $stmtHistorico->execute([
+                $mesaId,
+                $numComensales,
+                $mesa['menu_id'] !== null ? (int)$mesa['menu_id'] : null,
+                $pedidoId,
+                $totalFacturado
+            ]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Pedido creado correctamente',
+                'pedidoId' => $pedidoId,
+                'totalProductos' => $totalProductos,
+                'costeMenu' => $costeMenu,
+                'numComensales' => $numComensales,
+                'totalMenu' => $totalMenu,
+                'total' => $totalProductos + $totalMenu
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al crear el pedido', 500, $e->getMessage());
+        }
+    }
+    if ($entity === 'cocina' && $action === 'actualizar_estado_pedido') {
+        $id = $input['id'] ?? null;
+        $estado = trim($input['estado'] ?? '');
+
+        $estadosValidos = ['pendiente', 'en preparacion', 'listo'];
+
+        if (!$id || !in_array($estado, $estadosValidos, true)) {
+            responseError('Datos inválidos para actualizar el pedido');
+        }
+
+        $stmt = $pdo->prepare("
+        UPDATE pedido
+        SET estado = ?, updated_at = NOW()
         WHERE id = ?
     ");
-    $stmt->execute([
-        $nombre,
-        $imagen !== '' ? $imagen : null,
-        $categoriaId,
-        $disponible,
-        $precio,
-        $id
-    ]);
+        $stmt->execute([$estado, $id]);
 
-    $stmtDelete = $pdo->prepare("DELETE FROM producto_alergeno WHERE producto_id = ?");
-    $stmtDelete->execute([$id]);
+        responseOk([
+            'ok' => true,
+            'message' => 'Estado del pedido actualizado'
+        ]);
+    }
 
-    if (!empty($alergenos)) {
-        $stmtAlergeno = $pdo->prepare("
-            INSERT INTO producto_alergeno (producto_id, alergeno_id)
-            VALUES (?, ?)
+    if ($entity === 'cocina' && $action === 'actualizar_estado_linea') {
+        $id = $input['id'] ?? null;
+        $estado = trim($input['estado'] ?? '');
+
+        $estadosValidosLinea = ['pendiente', 'en preparacion', 'lista', 'servido'];
+
+        if (!$id || !in_array($estado, $estadosValidosLinea, true)) {
+            responseError('Datos inválidos para actualizar la línea', 400, [
+                'id_recibido' => $id,
+                'estado_recibido' => $estado,
+                'input' => $input
+            ]);
+        }
+
+        $stmtLinea = $pdo->prepare("
+        SELECT pedido_id
+        FROM linea_pedido
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtLinea->execute([$id]);
+        $linea = $stmtLinea->fetch(PDO::FETCH_ASSOC);
+
+        if (!$linea) {
+            responseError('Línea no encontrada', 404);
+        }
+
+        $pedidoId = (int)$linea['pedido_id'];
+
+        $stmt = $pdo->prepare("
+        UPDATE linea_pedido
+        SET estado = ?
+        WHERE id = ?
+    ");
+        $stmt->execute([$estado, $id]);
+
+        $stmtEstados = $pdo->prepare("
+        SELECT estado
+        FROM linea_pedido
+        WHERE pedido_id = ?
+    ");
+        $stmtEstados->execute([$pedidoId]);
+        $estadosLineas = $stmtEstados->fetchAll(PDO::FETCH_COLUMN);
+
+        $nuevoEstadoPedido = 'pendiente';
+
+        if (!empty($estadosLineas)) {
+            $todosListosOServidos = true;
+            $algunoEnPreparacion = false;
+
+            foreach ($estadosLineas as $estadoLinea) {
+                if ($estadoLinea === 'en preparacion') {
+                    $algunoEnPreparacion = true;
+                }
+
+                if (!in_array($estadoLinea, ['lista', 'servido'], true)) {
+                    $todosListosOServidos = false;
+                }
+            }
+
+            if ($todosListosOServidos) {
+                $nuevoEstadoPedido = 'listo';
+            } elseif ($algunoEnPreparacion) {
+                $nuevoEstadoPedido = 'en preparacion';
+            }
+        }
+
+        $stmtPedido = $pdo->prepare("
+        UPDATE pedido
+        SET estado = ?, updated_at = NOW()
+        WHERE id = ?
+    ");
+        $stmtPedido->execute([$nuevoEstadoPedido, $pedidoId]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Estado de la línea actualizado',
+            'pedidoId' => $pedidoId,
+            'pedidoEstado' => $nuevoEstadoPedido
+        ]);
+    }
+
+    if ($entity === 'mesas' && $action === 'terminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, numero
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$id]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('Mesa no encontrada', 404);
+        }
+
+        $stmt = $pdo->prepare("
+        UPDATE mesa
+        SET
+            estado = 'libre',
+            num_comensales = 0,
+            menu_id = NULL,
+            codigo_acceso = NULL,
+            codigo_activo = 0,
+            codigo_generado_at = NULL
+        WHERE id = ?
+    ");
+        $stmt->execute([$id]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Mesa terminada correctamente',
+            'mesa' => [
+                'id' => (int)$mesa['id'],
+                'numero' => $mesa['numero'],
+                'estado' => 'libre',
+                'numComensales' => 0,
+                'menuId' => null,
+                'codigoAcceso' => null,
+                'codigoActivo' => 0,
+                'codigoGeneradoAt' => null
+            ]
+        ]);
+    }
+
+    if ($entity === 'pedidos' && $action === 'crear') {
+        $mesaId = $input['mesaId'] ?? null;
+        $productos = is_array($input['productos'] ?? null) ? $input['productos'] : [];
+        $notas = trim($input['notas'] ?? '');
+
+        if (!$mesaId || empty($productos)) {
+            responseError('Faltan datos para crear el pedido');
+        }
+
+        $mesaId = (int)$mesaId;
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, menu_id, num_comensales, estado
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$mesaId]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('La mesa no existe');
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $usuarioId = 1;
+
+            $stmtPedido = $pdo->prepare("
+            INSERT INTO pedido (mesa_id, usuario_id, estado, created_at, updated_at)
+            VALUES (?, ?, 'pendiente', NOW(), NOW())
+        ");
+            $stmtPedido->execute([$mesaId, $usuarioId]);
+
+            $pedidoId = (int)$pdo->lastInsertId();
+
+            $stmtLinea = $pdo->prepare("
+            INSERT INTO linea_pedido (pedido_id, producto_id, cantidad, precio_unitario, estado, observaciones)
+            VALUES (?, ?, ?, ?, 'pendiente', ?)
         ");
 
-        foreach ($alergenos as $alergenoId) {
-            $stmtAlergeno->execute([$id, $alergenoId]);
+            $totalProductos = 0.0;
+
+            foreach ($productos as $producto) {
+                $productoId = $producto['productoId'] ?? null;
+                $cantidad = isset($producto['cantidad']) ? (int)$producto['cantidad'] : 0;
+                $precio = $producto['precio'] ?? null;
+
+                if (!$productoId || $cantidad <= 0 || $precio === null || $precio === '') {
+                    throw new Exception('Línea de pedido inválida');
+                }
+
+                $productoId = (int)$productoId;
+                $precio = (float)$precio;
+                $subtotal = $precio * $cantidad;
+                $totalProductos += $subtotal;
+
+                $stmtLinea->execute([
+                    $pedidoId,
+                    $productoId,
+                    $cantidad,
+                    $precio,
+                    $notas !== '' ? $notas : null
+                ]);
+            }
+
+            $costeMenu = 0.0;
+            $numComensales = max(0, (int)$mesa['num_comensales']);
+            $totalMenu = 0.0;
+
+            if (!empty($mesa['menu_id'])) {
+                $stmtMenu = $pdo->prepare("
+                SELECT coste
+                FROM menu
+                WHERE id = ?
+                LIMIT 1
+            ");
+                $stmtMenu->execute([(int)$mesa['menu_id']]);
+                $menu = $stmtMenu->fetch(PDO::FETCH_ASSOC);
+
+                if ($menu) {
+                    $costeMenu = (float)$menu['coste'];
+                    $totalMenu = $costeMenu * $numComensales;
+                }
+            }
+
+            $totalFacturado = $totalProductos;
+
+            $stmtEstadoMesa = $pdo->prepare("
+            UPDATE mesa
+            SET estado = 'ocupada'
+            WHERE id = ?
+        ");
+            $stmtEstadoMesa->execute([$mesaId]);
+
+            $stmtHistorico = $pdo->prepare("
+            INSERT INTO historico_mesa (
+                mesa_id,
+                num_comensales,
+                menu_id,
+                pedido_id,
+                fecha_apertura,
+                total_facturado
+            ) VALUES (?, ?, ?, ?, NOW(), ?)
+        ");
+            $stmtHistorico->execute([
+                $mesaId,
+                $numComensales,
+                $mesa['menu_id'] !== null ? (int)$mesa['menu_id'] : null,
+                $pedidoId,
+                $totalFacturado
+            ]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Pedido creado correctamente',
+                'pedidoId' => $pedidoId,
+                'totalProductos' => $totalProductos,
+                'costeMenu' => $costeMenu,
+                'numComensales' => $numComensales,
+                'totalMenu' => $totalMenu,
+                'total' => $totalProductos + $totalMenu
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al crear el pedido', 500, $e->getMessage());
         }
     }
 
-    $pdo->commit();
+    if ($entity === 'pedidos' && $action === 'crear') {
+        $mesaId = $input['mesaId'] ?? null;
+        $productos = is_array($input['productos'] ?? null) ? $input['productos'] : [];
+        $notas = trim($input['notas'] ?? '');
 
-    responseOk([
-        'ok' => true,
-        'message' => 'Producto actualizado correctamente'
-    ]);
-}
+        if (!$mesaId || empty($productos)) {
+            responseError('Faltan datos para crear el pedido');
+        }
+
+        $mesaId = (int)$mesaId;
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, menuid, numcomensales, estado
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$mesaId]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('La mesa no existe');
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $usuarioId = 1;
+
+            $stmtPedido = $pdo->prepare("
+            INSERT INTO pedido (mesaid, usuarioid, estado, createdat, updatedat)
+            VALUES (?, ?, 'pendiente', NOW(), NOW())
+        ");
+            $stmtPedido->execute([$mesaId, $usuarioId]);
+
+            $pedidoId = (int)$pdo->lastInsertId();
+
+            $stmtLinea = $pdo->prepare("
+            INSERT INTO lineapedido (pedidoid, productoid, cantidad, preciounitario, estado, observaciones)
+            VALUES (?, ?, ?, ?, 'pendiente', ?)
+        ");
+
+            $totalProductos = 0.0;
+
+            foreach ($productos as $producto) {
+                $productoId = $producto['productoId'] ?? null;
+                $cantidad = isset($producto['cantidad']) ? (int)$producto['cantidad'] : 0;
+                $precio = $producto['precio'] ?? null;
+
+                if (!$productoId || $cantidad <= 0 || $precio === null || $precio === '') {
+                    throw new Exception('Línea de pedido inválida');
+                }
+
+                $productoId = (int)$productoId;
+                $precio = (float)$precio;
+                $subtotal = $precio * $cantidad;
+                $totalProductos += $subtotal;
+
+                $stmtLinea->execute([
+                    $pedidoId,
+                    $productoId,
+                    $cantidad,
+                    $precio,
+                    $notas !== '' ? $notas : null
+                ]);
+            }
+
+            $stmtEstadoMesa = $pdo->prepare("
+            UPDATE mesa
+            SET estado = 'ocupada'
+            WHERE id = ?
+        ");
+            $stmtEstadoMesa->execute([$mesaId]);
+
+            $stmtHistorico = $pdo->prepare("
+            INSERT INTO historicomesa (
+                mesaid,
+                numcomensales,
+                menuid,
+                pedidoid,
+                fechaapertura,
+                totalfacturado
+            ) VALUES (?, ?, ?, ?, NOW(), ?)
+        ");
+            $stmtHistorico->execute([
+                $mesaId,
+                (int)$mesa['numcomensales'],
+                $mesa['menuid'] !== null ? (int)$mesa['menuid'] : null,
+                $pedidoId,
+                $totalProductos
+            ]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Pedido creado correctamente',
+                'pedidoId' => $pedidoId,
+                'totalProductos' => $totalProductos,
+                'total' => $totalProductos
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al crear el pedido', 500, $e->getMessage());
+        }
+    }
+
+    if ($entity === 'cocina' && $action === 'actualizar_estado_pedido') {
+        $id = $input['id'] ?? null;
+        $estado = trim($input['estado'] ?? '');
+
+        $estadosValidos = ['pendiente', 'en preparacion', 'listo'];
+
+        if (!$id || !in_array($estado, $estadosValidos, true)) {
+            responseError('Datos inválidos para actualizar el pedido');
+        }
+
+        $stmt = $pdo->prepare("
+        UPDATE pedido
+        SET estado = ?, updated_at = NOW()
+        WHERE id = ?
+    ");
+        $stmt->execute([$estado, $id]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Estado del pedido actualizado'
+        ]);
+    }
+
+    if ($entity === 'cocina' && $action === 'actualizar_estado_pedido') {
+        $id = $input['id'] ?? null;
+        $estado = trim($input['estado'] ?? '');
+
+        $estadosValidos = ['pendiente', 'en preparacion', 'listo'];
+
+        if (!$id || !in_array($estado, $estadosValidos, true)) {
+            responseError('Datos inválidos para actualizar el pedido');
+        }
+
+        $stmt = $pdo->prepare("
+        UPDATE pedido
+        SET estado = ?, updated_at = NOW()
+        WHERE id = ?
+    ");
+        $stmt->execute([$estado, $id]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Estado del pedido actualizado'
+        ]);
+    }
+
+    if ($entity === 'cocina' && $action === 'actualizar_estado_linea') {
+        $id = $input['id'] ?? null;
+        $estado = trim($input['estado'] ?? '');
+
+        $estadosValidosLinea = ['pendiente', 'en preparacion', 'lista', 'servido'];
+
+        if (!$id || !in_array($estado, $estadosValidosLinea, true)) {
+            responseError('Datos inválidos para actualizar la línea', 400, [
+                'id_recibido' => $id,
+                'estado_recibido' => $estado,
+                'input' => $input
+            ]);
+        }
+
+        $stmtLinea = $pdo->prepare("
+        SELECT pedido_id
+        FROM linea_pedido
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtLinea->execute([$id]);
+        $linea = $stmtLinea->fetch(PDO::FETCH_ASSOC);
+
+        if (!$linea) {
+            responseError('Línea no encontrada', 404);
+        }
+
+        $pedidoId = (int)$linea['pedido_id'];
+
+        $stmt = $pdo->prepare("
+        UPDATE linea_pedido
+        SET estado = ?
+        WHERE id = ?
+    ");
+        $stmt->execute([$estado, $id]);
+
+        $stmtEstados = $pdo->prepare("
+        SELECT estado
+        FROM linea_pedido
+        WHERE pedido_id = ?
+    ");
+        $stmtEstados->execute([$pedidoId]);
+        $estadosLineas = $stmtEstados->fetchAll(PDO::FETCH_COLUMN);
+
+        $nuevoEstadoPedido = 'pendiente';
+
+        if (!empty($estadosLineas)) {
+            $todosListosOServidos = true;
+            $algunoEnPreparacion = false;
+
+            foreach ($estadosLineas as $estadoLinea) {
+                if ($estadoLinea === 'en preparacion') {
+                    $algunoEnPreparacion = true;
+                }
+
+                if (!in_array($estadoLinea, ['lista', 'servido'], true)) {
+                    $todosListosOServidos = false;
+                }
+            }
+
+            if ($todosListosOServidos) {
+                $nuevoEstadoPedido = 'listo';
+            } elseif ($algunoEnPreparacion) {
+                $nuevoEstadoPedido = 'en preparacion';
+            }
+        }
+
+        $stmtPedido = $pdo->prepare("
+        UPDATE pedido
+        SET estado = ?, updated_at = NOW()
+        WHERE id = ?
+    ");
+        $stmtPedido->execute([$nuevoEstadoPedido, $pedidoId]);
+
+        responseOk([
+            'ok' => true,
+            'message' => 'Estado de la línea actualizado',
+            'pedidoId' => $pedidoId,
+            'pedidoEstado' => $nuevoEstadoPedido
+        ]);
+    }
+
+    if ($entity === 'mesas' && $action === 'terminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmtMesa = $pdo->prepare("
+        SELECT id, numero
+        FROM mesa
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtMesa->execute([$id]);
+        $mesa = $stmtMesa->fetch(PDO::FETCH_ASSOC);
+
+        if (!$mesa) {
+            responseError('Mesa no encontrada', 404);
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $stmtHistorico = $pdo->prepare("
+            DELETE FROM historico_mesa
+            WHERE mesa_id = ?
+        ");
+            $stmtHistorico->execute([$id]);
+
+            $stmt = $pdo->prepare("
+            UPDATE mesa
+            SET
+                estado = 'libre',
+                num_comensales = 0,
+                menu_id = NULL,
+                codigo_acceso = NULL,
+                codigo_activo = 0,
+                codigo_generado_at = NULL
+            WHERE id = ?
+        ");
+            $stmt->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Mesa terminada correctamente',
+                'mesa' => [
+                    'id' => (int)$mesa['id'],
+                    'numero' => $mesa['numero'],
+                    'estado' => 'libre',
+                    'numComensales' => 0,
+                    'menuId' => null,
+                    'codigoAcceso' => null,
+                    'codigoActivo' => 0,
+                    'codigoGeneradoAt' => null
+                ]
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al terminar la mesa', 500, $e->getMessage());
+        }
+    }
+
+    if ($entity === 'pedidos' && $action === 'historial_mesa') {
+        $mesaId = $input['mesaId'] ?? null;
+
+        if (!$mesaId) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $mesaId = (int)$mesaId;
+
+        $stmt = $pdo->prepare("
+        SELECT
+            hm.id,
+            hm.mesa_id,
+            hm.num_comensales,
+            hm.menu_id,
+            hm.pedido_id,
+            hm.fecha_apertura,
+            hm.total_facturado,
+            p.estado AS pedido_estado,
+            p.created_at,
+            p.updated_at
+        FROM historico_mesa hm
+        LEFT JOIN pedido p ON p.id = hm.pedido_id
+        WHERE hm.mesa_id = ?
+        ORDER BY hm.fecha_apertura DESC, hm.id DESC
+    ");
+        $stmt->execute([$mesaId]);
+        $historial = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtLineas = $pdo->prepare("
+        SELECT
+            lp.id,
+            lp.pedido_id,
+            lp.producto_id,
+            pr.nombre AS producto_nombre,
+            lp.cantidad,
+            lp.precio_unitario,
+            lp.estado,
+            lp.observaciones
+        FROM linea_pedido lp
+        INNER JOIN producto pr ON pr.id = lp.producto_id
+        WHERE lp.pedido_id = ?
+        ORDER BY lp.id ASC
+    ");
+
+        foreach ($historial as &$item) {
+            $pedidoId = isset($item['pedido_id']) ? (int)$item['pedido_id'] : 0;
+            $lineas = [];
+
+            if ($pedidoId > 0) {
+                $stmtLineas->execute([$pedidoId]);
+                $lineas = $stmtLineas->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            $item = [
+                'id' => (int)$item['id'],
+                'mesaId' => (int)$item['mesa_id'],
+                'numComensales' => isset($item['num_comensales']) ? (int)$item['num_comensales'] : 0,
+                'menuId' => $item['menu_id'] !== null ? (int)$item['menu_id'] : null,
+                'pedidoId' => $pedidoId > 0 ? $pedidoId : null,
+                'fechaApertura' => $item['fecha_apertura'],
+                'totalFacturado' => (float)$item['total_facturado'],
+                'estado' => $item['pedido_estado'] ?? null,
+                'pedidoEstado' => $item['pedido_estado'] ?? null,
+                'createdAt' => $item['created_at'] ?? null,
+                'updatedAt' => $item['updated_at'] ?? null,
+                'lineas' => array_map(function ($linea) {
+                    return [
+                        'id' => (int)$linea['id'],
+                        'pedidoId' => (int)$linea['pedido_id'],
+                        'productoId' => (int)$linea['producto_id'],
+                        'productoNombre' => $linea['producto_nombre'],
+                        'cantidad' => (int)$linea['cantidad'],
+                        'precioUnitario' => (float)$linea['precio_unitario'],
+                        'estado' => $linea['estado'],
+                        'observaciones' => $linea['observaciones'],
+                    ];
+                }, $lineas),
+            ];
+        }
+
+        responseOk([
+            'ok' => true,
+            'historial' => $historial
+        ]);
+    }
+
+    if ($entity === 'cocina' && $action === 'eliminar_pedido') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de pedido obligatorio');
+        }
+
+        $stmtPedido = $pdo->prepare("
+        SELECT id, estado
+        FROM pedido
+        WHERE id = ?
+        LIMIT 1
+    ");
+        $stmtPedido->execute([$id]);
+        $pedido = $stmtPedido->fetch(PDO::FETCH_ASSOC);
+
+        if (!$pedido) {
+            responseError('Pedido no encontrado', 404);
+        }
+
+        if ($pedido['estado'] !== 'listo') {
+            responseError('Solo se pueden eliminar pedidos en estado listo', 400);
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            $stmtLineas = $pdo->prepare("
+            DELETE FROM linea_pedido
+            WHERE pedido_id = ?
+        ");
+            $stmtLineas->execute([$id]);
+
+            $stmtDeletePedido = $pdo->prepare("
+            DELETE FROM pedido
+            WHERE id = ?
+        ");
+            $stmtDeletePedido->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Pedido eliminado correctamente'
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            responseError('Error al eliminar el pedido', 500, $e->getMessage());
+        }
+    }
     responseError('Ruta no válida', 404);
 } catch (Throwable $e) {
     responseError('Error interno del servidor', 500, $e->getMessage());

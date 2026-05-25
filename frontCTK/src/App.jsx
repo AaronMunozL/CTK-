@@ -7,50 +7,93 @@ import RecepcionView from "./modules/recepcion/RecepcionView";
 import CamareroView from "./modules/camarero/CamareroView";
 import UsuarioView from "./modules/usuario/UsuarioView";
 
+function ModuleSelectorView({ user, onSelect, onSalir }) {
+  const rol = (user?.rol || "").toLowerCase();
+
+  const opciones = [];
+
+  if (rol === "administrador") {
+    opciones.push(
+      { key: "admin", label: "Administración" },
+      { key: "cocina", label: "Cocina" },
+      { key: "recepcion", label: "Recepción" },
+      { key: "camarero", label: "Camarero" }
+    );
+  }
+
+  if (rol === "cocina") {
+    opciones.push({ key: "cocina", label: "Cocina" });
+  }
+
+  if (rol === "recepcion") {
+    opciones.push({ key: "recepcion", label: "Recepción" });
+  }
+
+  if (rol === "camarero") {
+    opciones.push({ key: "camarero", label: "Camarero" });
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 p-6 flex items-center justify-center">
+      <div className="w-full max-w-4xl rounded-3xl bg-white p-8 shadow-xl">
+        <div className="mb-8 text-center">
+          <p className="text-sm text-slate-500">Acceso de personal</p>
+          <h1 className="text-3xl font-bold mt-2">Selecciona un módulo</h1>
+          <p className="mt-2 text-slate-600">
+            Usuario: <span className="font-semibold">{user?.usuario}</span> · Rol:{" "}
+            <span className="font-semibold">{user?.rol}</span>
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {opciones.map((opcion) => (
+            <button
+              key={opcion.key}
+              onClick={() => onSelect(opcion.key)}
+              className="rounded-3xl border border-slate-200 bg-slate-50 p-6 text-left transition hover:border-blue-500 hover:bg-blue-50"
+            >
+              <p className="text-sm text-slate-500">Módulo</p>
+              <p className="mt-2 text-xl font-bold">{opcion.label}</p>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-8 flex justify-center">
+          <button
+            onClick={onSalir}
+            className="rounded-2xl bg-slate-900 px-5 py-3 text-white"
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [screen, setScreen] = useState("landing");
   const [staffUser, setStaffUser] = useState(null);
-  const [codigoMesa, setCodigoMesa] = useState("");
+  const [mesaUsuario, setMesaUsuario] = useState(null);
 
-  const handleCodigoValido = (codigo) => {
-    setCodigoMesa(codigo);
+  const handleCodigoValido = (mesa) => {
+    setMesaUsuario(mesa);
     setScreen("usuario");
   };
 
   const handleStaffLogin = (user) => {
     setStaffUser(user);
-
-    if (user.rol === "administrador") {
-      setScreen("admin");
-      return;
-    }
-
-    if (user.rol === "cocina") {
-      setScreen("cocina");
-      return;
-    }
-
-    if (user.rol === "recepcion") {
-      setScreen("recepcion");
-      return;
-    }
-
-    if (user.rol === "camarero") {
-      setScreen("camarero");
-      return;
-    }
-
-    setScreen("landing");
+    setScreen("staff-module-selector");
   };
 
   const volverInicio = () => {
     setScreen("landing");
     setStaffUser(null);
-    setCodigoMesa("");
+    setMesaUsuario(null);
   };
 
-  const volverAdmin = () => {
-    setScreen("admin");
+  const volverSelectorModulos = () => {
+    setScreen("staff-module-selector");
   };
 
   if (screen === "landing") {
@@ -71,8 +114,24 @@ function App() {
     );
   }
 
+  if (screen === "staff-module-selector") {
+    return (
+      <ModuleSelectorView
+        user={staffUser}
+        onSelect={setScreen}
+        onSalir={volverInicio}
+      />
+    );
+  }
+
   if (screen === "usuario") {
-    return <UsuarioView codigoMesa={codigoMesa} onSalir={volverInicio} />;
+    return (
+      <UsuarioView
+        mesa={mesaUsuario}
+        onSalir={volverInicio}
+        onBack={volverInicio}
+      />
+    );
   }
 
   if (screen === "admin") {
@@ -80,6 +139,7 @@ function App() {
       <AdminView
         user={staffUser}
         onSalir={volverInicio}
+        onBack={volverSelectorModulos}
         onNavigate={setScreen}
       />
     );
@@ -90,7 +150,7 @@ function App() {
       <CocinaView
         user={staffUser}
         onSalir={volverInicio}
-        onBack={staffUser?.rol === "administrador" ? volverAdmin : null}
+        onBack={volverSelectorModulos}
       />
     );
   }
@@ -100,7 +160,7 @@ function App() {
       <RecepcionView
         user={staffUser}
         onSalir={volverInicio}
-        onBack={staffUser?.rol === "administrador" ? volverAdmin : null}
+        onBack={volverSelectorModulos}
       />
     );
   }
@@ -110,7 +170,7 @@ function App() {
       <CamareroView
         user={staffUser}
         onSalir={volverInicio}
-        onBack={staffUser?.rol === "administrador" ? volverAdmin : null}
+        onBack={volverSelectorModulos}
       />
     );
   }

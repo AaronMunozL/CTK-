@@ -1,150 +1,232 @@
-const API_URL = "http://localhost/CTK/backCTK/api.php";
+const API_URL = "/api";
+const BACKEND_BASE_URL = "http://localhost/CTK/backCTK";
 
-async function apiFetch(entity, action, payload = {}) {
+async function apiRequest(action, entity, payload = {}) {
   const response = await fetch(API_URL, {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
+    credentials: "include",
     body: JSON.stringify({
-      entity,
       action,
+      entity,
       ...payload,
     }),
   });
 
-  const data = await response.json().catch(() => ({}));
+  let data = null;
 
-  if (!response.ok) {
-    throw new Error(data.error || "Error en la petición");
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("La respuesta del servidor no es JSON válido");
+  }
+
+  if (!response.ok || data.ok === false || data.error) {
+    throw new Error(data.message || data.error || "Error en la petición");
   }
 
   return data;
 }
 
-// =========================
-// AUTH
-// =========================
+export function getImageUrl(path) {
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  return `${BACKEND_BASE_URL}/${String(path).replace(/^\/+/, "")}`;
+}
+
+/* =========================
+   AUTH
+========================= */
+
 export async function login(usuario, password) {
-  return apiFetch("auth", "login", { usuario, password });
+  return apiRequest("login", "auth", { usuario, password });
 }
 
 export async function logout() {
-  return apiFetch("auth", "logout");
+  return apiRequest("logout", "auth");
 }
 
-// =========================
-// USUARIOS
-// =========================
-export async function getUsuarios() {
-  return apiFetch("usuarios", "listar");
+/* =========================
+   USUARIO / MESA / PEDIDO
+========================= */
+
+export async function validarCodigoMesa(codigo) {
+  return apiRequest("validar-codigo", "mesas", { codigo });
 }
+
+export async function crearPedidoUsuario(data) {
+  return apiRequest("crear", "pedidos", data);
+}
+
+/* =========================
+   USUARIOS
+========================= */
 
 export async function getRoles() {
-  return apiFetch("usuarios", "roles");
+  return apiRequest("roles", "usuarios");
 }
 
-export async function crearUsuario(payload) {
-  return apiFetch("usuarios", "crear", payload);
+export async function getUsuarios() {
+  return apiRequest("listar", "usuarios");
 }
 
-export async function actualizarUsuario(payload) {
-  return apiFetch("usuarios", "actualizar", payload);
+export async function crearUsuario(data) {
+  return apiRequest("crear", "usuarios", data);
 }
 
-export async function toggleUsuario(payload) {
-  return apiFetch("usuarios", "toggle", payload);
+export async function actualizarUsuario(data) {
+  return apiRequest("actualizar", "usuarios", data);
 }
 
 export async function eliminarUsuario(id) {
-  return apiFetch("usuarios", "eliminar", { id });
+  return apiRequest("eliminar", "usuarios", { id });
 }
 
-// =========================
-// MESAS
-// =========================
-export async function getMesas() {
-  return apiFetch("mesas", "listar");
+export async function toggleUsuario(id, activo) {
+  return apiRequest("toggle", "usuarios", { id, activo });
 }
 
-export async function crearMesa(payload) {
-  return apiFetch("mesas", "crear", payload);
-}
+/* =========================
+   CATEGORÍAS
+========================= */
 
-export async function actualizarMesa(payload) {
-  return apiFetch("mesas", "actualizar", payload);
-}
-
-export async function validarCodigoMesa(codigo) {
-  return apiFetch("mesas", "validar-codigo", { codigo });
-}
-
-// =========================
-// MENUS
-// =========================
-export async function getMenus() {
-  return apiFetch("menus", "listar");
-}
-
-export async function crearMenu(payload) {
-  return apiFetch("menus", "crear", payload);
-}
-
-export async function actualizarMenu(payload) {
-  return apiFetch("menus", "actualizar", payload);
-}
-
-// =========================
-// CATEGORIAS
-// =========================
 export async function getCategorias() {
-  return apiFetch("categorias", "listar");
+  return apiRequest("listar", "categorias");
 }
 
-export async function crearCategoria(payload) {
-  return apiFetch("categorias", "crear", payload);
+export async function crearCategoria(data) {
+  return apiRequest("crear", "categorias", data);
 }
 
-export async function actualizarCategoria(payload) {
-  return apiFetch("categorias", "actualizar", payload);
+export async function actualizarCategoria(data) {
+  return apiRequest("actualizar", "categorias", data);
 }
 
-// =========================
-// ALERGENOS
-// =========================
+export async function eliminarCategoria(id) {
+  return apiRequest("eliminar", "categorias", { id });
+}
+
+/* =========================
+   ALÉRGENOS
+========================= */
+
 export async function getAlergenos() {
-  return apiFetch("alergenos", "listar");
+  return apiRequest("listar", "alergenos");
 }
 
-export async function crearAlergeno(payload) {
-  return apiFetch("alergenos", "crear", payload);
+export async function crearAlergeno(data) {
+  return apiRequest("crear", "alergenos", data);
 }
 
-export async function actualizarAlergeno(payload) {
-  return apiFetch("alergenos", "actualizar", payload);
+export async function actualizarAlergeno(data) {
+  return apiRequest("actualizar", "alergenos", data);
 }
 
-// =========================
-// PRODUCTOS
-// =========================
+export async function eliminarAlergeno(id) {
+  return apiRequest("eliminar", "alergenos", { id });
+}
+
+/* =========================
+   MENÚS
+========================= */
+
+export async function getMenus() {
+  return apiRequest("listar", "menus");
+}
+
+export async function crearMenu(data) {
+  return apiRequest("crear", "menus", data);
+}
+
+export async function actualizarMenu(data) {
+  return apiRequest("actualizar", "menus", data);
+}
+
+export async function eliminarMenu(id) {
+  return apiRequest("eliminar", "menus", { id });
+}
+
+/* =========================
+   PRODUCTOS
+========================= */
+
 export async function getProductos() {
-  return apiFetch("productos", "listar");
+  return apiRequest("listar", "productos");
 }
 
-export async function crearProducto(payload) {
-  return apiFetch("productos", "crear", payload);
+export async function crearProducto(data) {
+  return apiRequest("crear", "productos", data);
 }
 
-export async function actualizarProducto(payload) {
-  return apiFetch("productos", "actualizar", payload);
+export async function actualizarProducto(data) {
+  return apiRequest("actualizar", "productos", data);
 }
-export async function subirImagen(file, tipo) {
+
+export async function eliminarProducto(id) {
+  return apiRequest("eliminar", "productos", { id });
+}
+
+
+/* =========================
+   MESAS
+========================= */
+
+export async function getMesas() {
+  return apiRequest("listar", "mesas");
+}
+
+export async function crearMesa(data) {
+  return apiRequest("crear", "mesas", data);
+}
+
+export async function actualizarMesa(data) {
+  return apiRequest("actualizar", "mesas", data);
+}
+
+export async function eliminarMesa(id) {
+  return apiRequest("eliminar", "mesas", { id });
+}
+
+export async function generarCodigoMesa(id) {
+  return apiRequest("generar-codigo", "mesas", { id });
+}
+
+export async function resetearCodigoMesa(id) {
+  return apiRequest("resetear-codigo", "mesas", { id });
+}
+
+/* =========================
+   COCINA
+========================= */
+
+export async function listarPedidosCocina() {
+  return apiRequest("listar_pedidos", "cocina");
+}
+
+export async function getPedidosCocina() {
+  return apiRequest("listar_pedidos", "cocina");
+}
+
+export async function actualizarEstadoPedido(data) {
+  return apiRequest("actualizar_estado_pedido", "cocina", data);
+}
+
+export async function actualizarEstadoLineaPedido(data) {
+  return apiRequest("actualizar_estado_linea", "cocina", data);
+}
+
+/* =========================
+   SUBIDA DE IMÁGENES
+========================= */
+
+async function subirImagen(tipo, imagenFile) {
   const formData = new FormData();
   formData.append("entity", "uploads");
   formData.append("action", "imagen");
   formData.append("tipo", tipo);
-  formData.append("imagen", file);
+  formData.append("imagen", imagenFile);
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -152,19 +234,40 @@ export async function subirImagen(file, tipo) {
     body: formData,
   });
 
-  const data = await response.json().catch(() => ({}));
+  let data = null;
 
-  if (!response.ok) {
-    throw new Error(data.error || "Error al subir la imagen");
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("La respuesta del servidor no es JSON válido");
+  }
+
+  if (!response.ok || data.ok === false || data.error) {
+    throw new Error(data.message || data.error || "Error al subir la imagen");
   }
 
   return data;
 }
 
-export async function subirImagenProducto(file) {
-  return subirImagen(file, "producto");
+export async function subirImagenAlergeno(imagenFile) {
+  return subirImagen("alergeno", imagenFile);
 }
 
-export async function subirImagenAlergeno(file) {
-  return subirImagen(file, "alergeno");
+export async function subirImagenProducto(imagenFile) {
+  return subirImagen("producto", imagenFile);
+}
+
+export async function terminarMesa(id) {
+  return apiRequest("terminar", "mesas", { id });
+}
+
+export async function eliminarPedidoCocina(id) {
+  return apiRequest("eliminar_pedido", "cocina", { id });
+}
+
+export async function cerrarMesa(id) {
+  return apiRequest("cerrar", "mesas", { id });
+}
+export async function getHistorialMesa(mesaId) {
+  return apiRequest("historial_mesa", "pedidos", { mesaId });
 }
