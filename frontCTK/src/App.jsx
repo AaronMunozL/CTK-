@@ -16,6 +16,8 @@ import CocinaView from "./modules/cocina/CocinaView";
 import RecepcionView from "./modules/recepcion/RecepcionView";
 import CamareroView from "./modules/camarero/CamareroView";
 import UsuarioView from "./modules/usuario/UsuarioView";
+import Footer from "./components/Footer";
+import Header from "./components/Header";
 
 /**
  * Pantalla de selección de módulo, visible tras el login del personal.
@@ -116,17 +118,29 @@ function App() {
     setScreen("staff-module-selector");
   };
 
+  /**
+   * Envuelve cualquier pantalla con Header + contenido + Footer.
+   * onStaffLogin: si se pasa, el Header muestra el botón "Acceso trabajadores".
+   */
+  const withLayout = (children, onStaffLogin = null) => (
+    <div className="flex min-h-screen flex-col">
+      <Header onOpenStaffLogin={onStaffLogin} />
+      <div className="flex-1">{children}</div>
+      <Footer />
+    </div>
+  );
+
   if (screen === "landing") {
-    return (
+    return withLayout(
       <LandingView
-        onOpenStaffLogin={() => setScreen("staff-login")}
         onCodigoValido={handleCodigoValido}
-      />
+      />,
+      () => setScreen("staff-login")
     );
   }
 
   if (screen === "staff-login") {
-    return (
+    return withLayout(
       <StaffLoginView
         onBack={volverInicio}
         onLoginSuccess={handleStaffLogin}
@@ -135,7 +149,7 @@ function App() {
   }
 
   if (screen === "staff-module-selector") {
-    return (
+    return withLayout(
       <ModuleSelectorView
         user={staffUser}
         onSelect={setScreen}
@@ -145,7 +159,7 @@ function App() {
   }
 
   if (screen === "usuario") {
-    return (
+    return withLayout(
       <UsuarioView
         user={staffUser}
         mesa={mesaUsuario}
@@ -156,7 +170,7 @@ function App() {
   }
 
   if (screen === "admin") {
-    return (
+    return withLayout(
       <AdminView
         user={staffUser}
         onSalir={volverInicio}
@@ -167,7 +181,7 @@ function App() {
   }
 
   if (screen === "cocina") {
-    return (
+    return withLayout(
       <CocinaView
         user={staffUser}
         onSalir={volverInicio}
@@ -177,7 +191,7 @@ function App() {
   }
 
   if (screen === "recepcion") {
-    return (
+    return withLayout(
       <RecepcionView
         user={staffUser}
         onSalir={volverInicio}
@@ -187,7 +201,7 @@ function App() {
   }
 
   if (screen === "camarero") {
-    return (
+    return withLayout(
       <CamareroView
         user={staffUser}
         onSalir={volverInicio}

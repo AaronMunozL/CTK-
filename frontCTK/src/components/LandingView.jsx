@@ -7,7 +7,7 @@ function normalizarCodigo(valor) {
   return String(valor ?? "").replace(/\D/g, "").slice(0, CODIGO_LENGTH);
 }
 
-export default function LandingView({ onOpenStaffLogin, onCodigoValido }) {
+export default function LandingView({ onCodigoValido }) {
   const [codigo, setCodigo] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -42,15 +42,6 @@ export default function LandingView({ onOpenStaffLogin, onCodigoValido }) {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <header className="p-4">
-        <button
-          onClick={onOpenStaffLogin}
-          className="rounded-xl bg-white px-4 py-2 shadow"
-        >
-          Acceso trabajadores
-        </button>
-      </header>
-
       <main className="flex min-h-[80vh] items-center justify-center px-4">
         <div className="w-full max-w-lg rounded-3xl bg-white p-8 shadow">
           <h1 className="text-3xl font-bold">Introduce tu código</h1>

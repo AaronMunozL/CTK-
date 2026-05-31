@@ -207,11 +207,11 @@ export default function UsuarioView({
         Number(a.id)
       );
 
-      // Filtro de alérgenos: el usuario selecciona alérgenos que QUIERE incluir;
-      // se muestran solo productos que los tengan todos (lógica AND)
+      // Puerta OR: si el producto contiene ALGUNO de los alérgenos seleccionados
+      // se oculta. Con que coincida uno solo, ya no aparece.
       const coincideAlergenos =
         alergenosActivos.length === 0 ||
-        alergenosActivos.every((id) => idsAlergenosProducto.includes(id));
+        !alergenosActivos.some((id) => idsAlergenosProducto.includes(id));
 
       // Si la mesa tiene menú asignado solo se muestran productos de ese menú
       const coincideMenu =
@@ -430,7 +430,7 @@ export default function UsuarioView({
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-stone-50 via-white to-slate-100 text-slate-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 pb-28 pt-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 pb-36 pt-4 sm:px-6 lg:px-8">
         <header className="sticky top-0 z-20 -mx-4 border-b border-white/60 bg-stone-50/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -623,7 +623,7 @@ export default function UsuarioView({
           <div className="mt-4">
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-slate-700">
-                Filtrar por alérgenos
+                Excluir alérgenos
               </p>
 
               {alergenosActivos.length > 0 ? (
