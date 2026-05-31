@@ -1,3 +1,13 @@
+/**
+ * App.jsx — componente raíz y enrutador del frontend.
+ *
+ * Gestiona la navegación entre pantallas mediante un estado `screen` (string).
+ * No usa React Router: cada pantalla es un componente montado condicionalmente.
+ *
+ * Flujo principal:
+ *   landing → staff-login → staff-module-selector → [admin|cocina|recepcion|camarero]
+ *   landing → (código de mesa) → usuario
+ */
 import { useState } from "react";
 import LandingView from "./components/LandingView";
 import StaffLoginView from "./components/StaffLoginView";
@@ -7,6 +17,11 @@ import RecepcionView from "./modules/recepcion/RecepcionView";
 import CamareroView from "./modules/camarero/CamareroView";
 import UsuarioView from "./modules/usuario/UsuarioView";
 
+/**
+ * Pantalla de selección de módulo, visible tras el login del personal.
+ * Construye las opciones según el rol del usuario: el administrador
+ * accede a todos los módulos; cada otro rol solo al suyo.
+ */
 function ModuleSelectorView({ user, onSelect, onSalir }) {
   const rol = (user?.rol || "").toLowerCase();
 
@@ -72,8 +87,12 @@ function ModuleSelectorView({ user, onSelect, onSalir }) {
 }
 
 function App() {
+  // Pantalla activa: 'landing' | 'staff-login' | 'staff-module-selector' |
+  //                  'admin' | 'cocina' | 'recepcion' | 'camarero' | 'usuario'
   const [screen, setScreen] = useState("landing");
+  // Usuario del personal autenticado (null si es cliente sin login)
   const [staffUser, setStaffUser] = useState(null);
+  // Mesa del cliente validada mediante código de acceso
   const [mesaUsuario, setMesaUsuario] = useState(null);
 
   const handleCodigoValido = (mesa) => {
@@ -86,6 +105,7 @@ function App() {
     setScreen("staff-module-selector");
   };
 
+  // Resetea todo el estado y vuelve a la pantalla inicial
   const volverInicio = () => {
     setScreen("landing");
     setStaffUser(null);
@@ -127,6 +147,7 @@ function App() {
   if (screen === "usuario") {
     return (
       <UsuarioView
+        user={staffUser}
         mesa={mesaUsuario}
         onSalir={volverInicio}
         onBack={volverInicio}

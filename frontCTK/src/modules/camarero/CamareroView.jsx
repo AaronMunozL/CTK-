@@ -1,3 +1,15 @@
+/**
+ * CamareroView — panel del personal de sala.
+ *
+ * Pestañas:
+ *   - Mesas: visión general del estado de todas las mesas. Al seleccionar
+ *     una mesa se activa el formulario de nuevo pedido a la derecha.
+ *   - Pedidos: listado de pedidos con filtro por estado y detalle de líneas.
+ *     El camarero puede cambiar el estado del pedido y de cada línea.
+ *
+ * Estados del pedido:  pendiente → en preparacion → listo
+ * Estados de una línea: pendiente → en preparacion → lista → servido
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   getMesas,
@@ -51,24 +63,42 @@ export default function CamareroView({ user, onSalir, onBack }) {
     return fecha.toLocaleString("es-ES");
   };
 
+  // Funciones de carga individuales con try/catch propio para que los errores
+  // sean visibles al usuario cuando se llaman en solitario (ej. tras crear pedido)
   const cargarMesas = async () => {
-    const res = await getMesas();
-    setMesas(res.mesas || []);
+    try {
+      const res = await getMesas();
+      setMesas(res.mesas || []);
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar las mesas.");
+    }
   };
 
   const cargarMenus = async () => {
-    const res = await getMenus();
-    setMenus(res.menus || []);
+    try {
+      const res = await getMenus();
+      setMenus(res.menus || []);
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar los menús.");
+    }
   };
 
   const cargarProductos = async () => {
-    const res = await getProductos();
-    setProductos(res.productos || []);
+    try {
+      const res = await getProductos();
+      setProductos(res.productos || []);
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar los productos.");
+    }
   };
 
   const cargarPedidos = async () => {
-    const res = await getPedidosCocina();
-    setPedidos(res.pedidos || []);
+    try {
+      const res = await getPedidosCocina();
+      setPedidos(res.pedidos || []);
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar los pedidos.");
+    }
   };
 
   const cargarTodo = async () => {
@@ -280,9 +310,10 @@ export default function CamareroView({ user, onSalir, onBack }) {
   };
 
   const pedidosFiltrados = useMemo(() => {
+    // 'activos' agrupa los tres estados intermedios que requieren atención
     if (filtroEstado === "activos") {
       return pedidos.filter((p) =>
-        ["pendiente", "en preparacion", "listo", "lista"].includes(p.estado)
+        ["pendiente", "en preparacion", "listo"].includes(p.estado)
       );
     }
 
@@ -645,8 +676,6 @@ export default function CamareroView({ user, onSalir, onBack }) {
                   <option value="pendiente">Pendiente</option>
                   <option value="en preparacion">En preparación</option>
                   <option value="listo">Listo</option>
-                  <option value="lista">Lista</option>
-                  <option value="servido">Servido</option>
                 </select>
               </div>
 
@@ -702,14 +731,8 @@ export default function CamareroView({ user, onSalir, onBack }) {
                       >
                         Listo
                       </button>
-
-                      <button
-                        type="button"
-                        onClick={() => cambiarEstadoPedido(pedido, "servido")}
-                        className="rounded-xl bg-amber-500 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-600"
-                      >
-                        Servido
-                      </button>
+                      {/* 'servido' no es un estado válido para el pedido (solo para líneas),
+                          por eso se ha eliminado ese botón */}
                     </div>
                   </article>
                 ))}

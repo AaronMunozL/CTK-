@@ -1,10 +1,21 @@
 <?php
+/**
+ * API principal de CTK — punto de entrada único para todas las peticiones JSON.
+ *
+ * Todas las llamadas llegan como POST con un body JSON { entity, action, ...datos }.
+ * Los uploads de imagen son la única excepción: llegan como multipart/form-data.
+ *
+ * Entidades disponibles: auth, uploads, usuarios, mesas, menus, categorias,
+ *                        alergenos, productos, cocina, pedidos.
+ */
+
 ini_set('display_errors', 0);
 ini_set('display_startup_errors', 0);
 error_reporting(0);
 
 header("Content-Type: application/json; charset=utf-8");
 
+// Respuesta vacía a peticiones preflight de CORS
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
@@ -12,6 +23,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 session_start();
 
+// ─── SUBIDA DE IMÁGENES ───────────────────────────────────────────────────────
+// Se maneja antes de cargar la BD porque llega como multipart, no JSON.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['entity'], $_POST['action'])) {
     if ($_POST['entity'] === 'uploads' && $_POST['action'] === 'imagen') {
         try {
@@ -55,7 +68,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['entity'], $_POST['act
 
             $originalName = $file['name'];
             $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+            // Se sanea el nombre original para evitar caracteres problemáticos en la ruta
             $safeName = preg_replace('/[^a-zA-Z0-9_-]/', '_', pathinfo($originalName, PATHINFO_FILENAME));
+            // Se prefija con el timestamp para garantizar nombres únicos
             $finalName = time() . '_' . $safeName . '.' . $extension;
 
             $destination = $uploadDir . $finalName;
@@ -79,23 +94,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['entity'], $_POST['act
 
 require_once __DIR__ . '/config/db.php';
 
+// Lectura del body JSON; si no hay body o no es JSON válido se usa array vacío
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
 $entity = $input['entity'] ?? '';
 $action = $input['action'] ?? '';
 
+// ─── HELPERS DE RESPUESTA ────────────────────────────────────────────────────
+
+/** Devuelve JSON de éxito y detiene la ejecución. */
 function responseOk($data = [])
 {
     echo json_encode($data);
     exit;
 }
 
+/** Devuelve JSON de error con el código HTTP indicado y detiene la ejecución. */
 function responseError($message, $code = 400, $extra = null)
 {
     http_response_code($code);
     echo json_encode(['error' => $message]);
     exit;
 }
+
+// ─── UTILIDADES ──────────────────────────────────────────────────────────────
+
+/**
+ * Genera un código de 6 dígitos que no esté en uso en ninguna mesa activa.
+ * El bucle do-while garantiza unicidad aunque la probabilidad de colisión es mínima.
+ */
 function generarCodigoMesaUnico(PDO $pdo)
 {
     do {
@@ -114,7 +141,12 @@ function generarCodigoMesaUnico(PDO $pdo)
     return $codigo;
 }
 
+// ─── ENRUTADOR PRINCIPAL ─────────────────────────────────────────────────────
+// Cada bloque if comprueba entity+action y responde (responseOk/responseError),
+// lo que llama a exit(), por lo que los bloques son mutuamente excluyentes.
 try {
+    // ── AUTH ──────────────────────────────────────────────────────────────────
+
     if ($entity === 'auth' && $action === 'login') {
         $usuario = trim($input['usuario'] ?? '');
         $password = trim($input['password'] ?? '');
@@ -163,6 +195,7 @@ try {
         ]);
     }
 
+
     if ($entity === 'auth' && $action === 'logout') {
         session_unset();
         session_destroy();
@@ -173,6 +206,14 @@ try {
         ]);
     }
 
+    // ── MESAS ─────────────────────────────────────────────────────────────────
+
+    /**
+     * cerrar: cierra una mesa por parte del personal (recepción/camarero).
+     * Marca el histórico con fecha_cierre, borra los pedidos activos
+     * y libera la mesa (estado libre, código inactivo).
+     * Operación en transacción para garantizar consistencia.
+     */
     if ($entity === 'mesas' && $action === 'cerrar') {
         $id = $input['id'] ?? null;
 
@@ -237,6 +278,8 @@ try {
             responseError('Error al cerrar la mesa', 500, $e->getMessage());
         }
     }
+    // ── USUARIOS ──────────────────────────────────────────────────────────────
+
     if ($entity === 'usuarios' && $action === 'listar') {
         $stmt = $pdo->prepare("
             SELECT
@@ -301,6 +344,7 @@ try {
         ]);
     }
 
+    // Si no se envía contraseña nueva se actualiza solo el resto de campos
     if ($entity === 'usuarios' && $action === 'actualizar') {
         $id = $input['id'] ?? null;
         $usuario = trim($input['usuario'] ?? '');
@@ -379,6 +423,8 @@ try {
             'message' => 'Usuario eliminado correctamente'
         ]);
     }
+
+    // ── MESAS (CRUD) ──────────────────────────────────────────────────────────
 
     if ($entity === 'mesas' && $action === 'listar') {
         $stmt = $pdo->prepare("
@@ -497,6 +543,12 @@ try {
     }
 
 
+    // ── ACCESO DE CLIENTE POR CÓDIGO ─────────────────────────────────────────
+
+    /**
+     * validar-codigo: el cliente introduce el código de 6 dígitos de su mesa
+     * para acceder a la vista de usuario. Devuelve los datos de la mesa.
+     */
     if ($entity === 'mesas' && $action === 'validar-codigo') {
         $codigo = trim($input['codigo'] ?? '');
 
@@ -618,6 +670,11 @@ try {
         ]);
     }
 
+    // ── MENÚS ─────────────────────────────────────────────────────────────────
+    // NOTA: hay dos handlers para 'menus/listar'. El segundo (más abajo) nunca
+    // se ejecuta porque responseOk() llama a exit(). Solo aplica este primero,
+    // que filtra por activo=1 y ordena por nombre.
+
     if ($entity === 'menus' && $action === 'listar') {
         $stmt = $pdo->prepare("
         SELECT
@@ -690,6 +747,8 @@ try {
         ]);
     }
 
+    // ── CATEGORÍAS ────────────────────────────────────────────────────────────
+
     if ($entity === 'categorias' && $action === 'listar') {
         $stmt = $pdo->prepare("
         SELECT id, nombre
@@ -737,6 +796,8 @@ try {
             'message' => 'Categoría actualizada correctamente'
         ]);
     }
+    // ── ALÉRGENOS ─────────────────────────────────────────────────────────────
+
     if ($entity === 'alergenos' && $action === 'listar') {
         $stmt = $pdo->prepare("
         SELECT id, nombre, icono
@@ -790,6 +851,14 @@ try {
         ]);
     }
 
+    // ── PRODUCTOS ─────────────────────────────────────────────────────────────
+
+    /**
+     * listar: devuelve todos los productos con sus alérgenos y menús asociados.
+     * Se hacen N consultas adicionales (una por producto) para cargar relaciones.
+     * Aceptable para el volumen de un restaurante; para catálogos grandes
+     * sería mejor un JOIN o una subconsulta agregada.
+     */
     if ($entity === 'productos' && $action === 'listar') {
         $stmt = $pdo->prepare("
         SELECT
@@ -908,6 +977,11 @@ try {
         }
     }
 
+    /**
+     * actualizar: estrategia delete-insert para alérgenos y menús.
+     * Se borran todas las relaciones existentes y se reinsertan con los nuevos
+     * valores, evitando lógica de diff. Seguro gracias a la transacción.
+     */
     if ($entity === 'productos' && $action === 'actualizar') {
         $id = $input['id'] ?? null;
         $nombre = trim($input['nombre'] ?? '');
@@ -988,6 +1062,13 @@ try {
         }
     }
 
+    // ── COCINA ────────────────────────────────────────────────────────────────
+
+    /**
+     * listar_pedidos: devuelve pedidos ordenados por urgencia (pendiente > en
+     * preparacion > listo) y luego por fecha de creación. Incluye las líneas
+     * de cada pedido en la misma respuesta para evitar N+1 en el frontend.
+     */
     if ($entity === 'cocina' && $action === 'listar_pedidos') {
         $stmt = $pdo->prepare("
         SELECT
@@ -1061,6 +1142,17 @@ try {
         ]);
     }
 
+    // ── PEDIDOS ───────────────────────────────────────────────────────────────
+
+    /**
+     * crear: crea un pedido con sus líneas en una transacción.
+     * Pasos: insertar pedido → insertar líneas → actualizar estado mesa a
+     * 'ocupada' → insertar registro en histórico_mesa.
+     * Si la mesa tiene menú asignado, también calcula el coste del menú
+     * (coste × num_comensales) y lo incluye en la respuesta para informar
+     * al usuario, aunque el total_facturado en historico_mesa solo refleja
+     * el importe de los productos.
+     */
     if ($entity === 'pedidos' && $action === 'crear') {
         $mesaId = $input['mesaId'] ?? null;
         $productos = is_array($input['productos'] ?? null) ? $input['productos'] : [];
@@ -1195,6 +1287,10 @@ try {
             responseError('Error al crear el pedido', 500, $e->getMessage());
         }
     }
+    /**
+     * actualizar_estado_pedido: cambia el estado global del pedido.
+     * Estados válidos: pendiente → en preparacion → listo.
+     */
     if ($entity === 'cocina' && $action === 'actualizar_estado_pedido') {
         $id = $input['id'] ?? null;
         $estado = trim($input['estado'] ?? '');
@@ -1218,6 +1314,14 @@ try {
         ]);
     }
 
+    /**
+     * actualizar_estado_linea: cambia el estado de una línea individual.
+     * Estados válidos: pendiente → en preparacion → lista → servido.
+     * Tras actualizar la línea, recalcula el estado del pedido padre:
+     *   - Si todas las líneas están en 'lista' o 'servido' → pedido 'listo'
+     *   - Si alguna está 'en preparacion' → pedido 'en preparacion'
+     *   - En otro caso → pedido 'pendiente'
+     */
     if ($entity === 'cocina' && $action === 'actualizar_estado_linea') {
         $id = $input['id'] ?? null;
         $estado = trim($input['estado'] ?? '');
@@ -1296,6 +1400,11 @@ try {
         ]);
     }
 
+    /**
+     * terminar: libera la mesa sin borrar el histórico (a diferencia de 'cerrar').
+     * Solo resetea el estado y el código de acceso. El histórico queda intacto
+     * para consulta posterior.
+     */
     if ($entity === 'mesas' && $action === 'terminar') {
         $id = $input['id'] ?? null;
 
@@ -1346,6 +1455,11 @@ try {
     }
 
 
+    /**
+     * historial_mesa: devuelve todos los registros del histórico de una mesa,
+     * incluyendo las líneas de cada pedido. Ordenado por fecha de apertura DESC
+     * para mostrar el más reciente primero.
+     */
     if ($entity === 'pedidos' && $action === 'historial_mesa') {
         $mesaId = $input['mesaId'] ?? null;
 
@@ -1433,6 +1547,10 @@ try {
         ]);
     }
 
+    /**
+     * eliminar_pedido: permite a cocina eliminar un pedido terminado (estado 'listo').
+     * Borra primero las líneas (FK) y luego el pedido. Transacción para atomicidad.
+     */
     if ($entity === 'cocina' && $action === 'eliminar_pedido') {
         $id = $input['id'] ?? null;
 
@@ -1486,7 +1604,9 @@ try {
             responseError('Error al eliminar el pedido', 500, $e->getMessage());
         }
     }
+    // Si ningún bloque coincidió con entity+action, se devuelve 404
     responseError('Ruta no válida', 404);
 } catch (Throwable $e) {
+    // Captura cualquier excepción no controlada dentro del flujo principal
     responseError('Error interno del servidor', 500, $e->getMessage());
 }

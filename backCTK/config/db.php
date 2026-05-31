@@ -1,4 +1,10 @@
 <?php
+/**
+ * Conexión PDO a MySQL.
+ * ERRMODE_EXCEPTION lanza PDOException en caso de fallo SQL, lo que permite
+ * capturarlos en los try/catch de api.php y hacer rollback si hay transacción.
+ * FETCH_ASSOC evita índices numéricos duplicados en los resultados.
+ */
 
 $host = '127.0.0.1';
 $dbname = 'restaurante_ctk';

@@ -1,3 +1,16 @@
+/**
+ * CocinaView — panel en tiempo real para el personal de cocina.
+ *
+ * Muestra los pedidos activos en tres columnas Kanban:
+ *   Pendientes | En preparación | Listos
+ *
+ * Cada pedido muestra sus líneas individuales con controles de estado.
+ * Se refresca automáticamente cada 10 segundos (toggle de autoRefresh).
+ *
+ * Estados del pedido:  pendiente → en preparacion → listo
+ * Estados de una línea: pendiente → en preparacion → lista → servido
+ * El backend recalcula el estado del pedido al cambiar cualquier línea.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   getPedidosCocina,
@@ -53,9 +66,10 @@ export default function CocinaView({ user, onBack, onSalir }) {
 
   const pedidosFiltrados = useMemo(() => {
     return pedidos.filter((pedido) => {
+      // El backend devuelve el número de mesa como 'mesaNumero' (camelCase)
       const coincideMesa =
         filtroMesa === "" ||
-        String(pedido.mesaNumero || pedido.mesaid || "").includes(filtroMesa);
+        String(pedido.mesaNumero || "").includes(filtroMesa);
 
       const texto = [
         pedido.id,
@@ -147,7 +161,7 @@ export default function CocinaView({ user, onBack, onSalir }) {
 
   const eliminarPedido = async (pedido) => {
     const ok = window.confirm(
-      `¿Eliminar el pedido #${pedido.id} de la mesa ${pedido.mesaNumero || pedido.mesaid}?`
+      `¿Eliminar el pedido #${pedido.id} de la mesa ${pedido.mesaNumero}?`
     );
     if (!ok) return;
 
@@ -315,11 +329,12 @@ export default function CocinaView({ user, onBack, onSalir }) {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm text-slate-500">Pedido #{pedido.id}</p>
-            <h3 className="text-2xl font-bold">Mesa {pedido.mesaNumero || pedido.mesaid}</h3>
+            {/* El backend devuelve mesaNumero y createdAt (camelCase) */}
+            <h3 className="text-2xl font-bold">Mesa {pedido.mesaNumero}</h3>
 
             <div className="mt-2 space-y-1 text-sm text-slate-600">
               <p>Estado: {pedido.estado}</p>
-              <p>Fecha: {formatearFecha(pedido.createdAt || pedido.createdat)}</p>
+              <p>Fecha: {formatearFecha(pedido.createdAt)}</p>
               <p>Líneas: {(pedido.lineas || []).length}</p>
             </div>
           </div>

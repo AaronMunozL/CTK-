@@ -1,3 +1,14 @@
+/**
+ * RecepcionView — panel de gestión de mesas para el personal de recepción.
+ *
+ * Funcionalidades:
+ *   - Ver todas las mesas con su estado, capacidad y código de acceso actual.
+ *   - Crear y editar mesas (número, capacidad, estado, comensales, menú asignado).
+ *   - Generar o resetear el código de 6 dígitos que los clientes usan para acceder.
+ *
+ * El formulario actúa en modo "crear" o "editar" según `modoCrear`.
+ * Al pulsar una mesa en el grid se carga en el formulario de edición.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   getMesas,
@@ -181,11 +192,13 @@ export default function RecepcionView({ user, onSalir, onBack }) {
         setMensaje("Mesa actualizada correctamente.");
       }
 
-      await cargarMesas();
+      // cargarMesas() actualiza el estado `mesas`; para reflejar los nuevos
+      // datos en el formulario buscamos la mesa en la lista ya cargada.
+      const resMesas = await getMesas();
+      setMesas(resMesas.mesas || []);
 
       if (!modoCrear && form.id) {
-        const res = await getMesas();
-        const actualizada = (res.mesas || []).find(
+        const actualizada = (resMesas.mesas || []).find(
           (m) => Number(m.id) === Number(form.id)
         );
         if (actualizada) {

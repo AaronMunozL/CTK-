@@ -1,3 +1,18 @@
+/**
+ * UsuarioView — interfaz de cliente para hacer pedidos desde la mesa.
+ *
+ * El cliente llega aquí tras validar el código de acceso de su mesa.
+ * Props:
+ *   - mesa: objeto con id, numero, estado, capacidad, numComensales, menuId
+ *   - onSalir: callback para volver al inicio (cierra la sesión de mesa)
+ *
+ * Funcionalidades:
+ *   - Carta: grid de productos filtrables por categoría, búsqueda y alérgenos.
+ *     Solo se muestran los productos disponibles y pertenecientes al menú asignado.
+ *   - Carrito: modal flotante con el resumen del pedido antes de confirmar.
+ *   - Historial: modal con todos los pedidos realizados en esta mesa y el total.
+ *   - Terminar mesa: libera la mesa y redirige al inicio.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   getProductos,
@@ -192,10 +207,13 @@ export default function UsuarioView({
         Number(a.id)
       );
 
+      // Filtro de alérgenos: el usuario selecciona alérgenos que QUIERE incluir;
+      // se muestran solo productos que los tengan todos (lógica AND)
       const coincideAlergenos =
         alergenosActivos.length === 0 ||
         alergenosActivos.every((id) => idsAlergenosProducto.includes(id));
 
+      // Si la mesa tiene menú asignado solo se muestran productos de ese menú
       const coincideMenu =
         !mesa?.menuId ||
         !Array.isArray(producto.menuIds) ||
@@ -211,6 +229,8 @@ export default function UsuarioView({
     });
   }, [productos, categoriaActiva, busqueda, alergenosActivos, mesa]);
 
+  // El carrito se deriva de `cantidades` (mapa productoId→cantidad) y la lista
+  // de productos. Solo incluye ítems con cantidad > 0.
   const carrito = useMemo(() => {
     return productos
       .map((producto) => {
