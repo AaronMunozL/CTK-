@@ -18,9 +18,6 @@ try {
 } catch (PDOException $e) {
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode([
-        'error' => 'Error de conexión a base de datos',
-        'debug' => $e->getMessage()
-    ]);
+    echo json_encode(['error' => 'Error de conexión a base de datos']);
     exit;
 }
