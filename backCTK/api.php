@@ -1587,6 +1587,19 @@ try {
             responseError('ID de categoría obligatorio');
         }
 
+        // categoria_id en producto es NOT NULL — no se puede dejar huérfano
+        $check = $pdo->prepare("SELECT COUNT(*) FROM producto WHERE categoria_id = ?");
+        $check->execute([$id]);
+        $total = (int)$check->fetchColumn();
+
+        if ($total > 0) {
+            responseError(
+                "No se puede eliminar: hay $total producto(s) asignado(s) a esta categoría. " .
+                "Reasígnalos o elimínalos primero.",
+                409
+            );
+        }
+
         $stmt = $pdo->prepare("DELETE FROM categoria WHERE id = ?");
         $stmt->execute([$id]);
 
@@ -1600,10 +1613,20 @@ try {
             responseError('ID de alérgeno obligatorio');
         }
 
-        $stmt = $pdo->prepare("DELETE FROM alergeno WHERE id = ?");
-        $stmt->execute([$id]);
+        $pdo->beginTransaction();
 
-        responseOk(['ok' => true, 'message' => 'Alérgeno eliminado correctamente']);
+        try {
+            // Eliminar las asociaciones producto↔alérgeno antes de borrar el alérgeno
+            $pdo->prepare("DELETE FROM producto_alergeno WHERE alergeno_id = ?")->execute([$id]);
+            $pdo->prepare("DELETE FROM alergeno WHERE id = ?")->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk(['ok' => true, 'message' => 'Alérgeno eliminado y desvinculado de los productos']);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            responseError('Error al eliminar el alérgeno', 500, $e->getMessage());
+        }
     }
 
     if ($entity === 'menus' && $action === 'eliminar') {
@@ -1613,10 +1636,27 @@ try {
             responseError('ID de menú obligatorio');
         }
 
-        $stmt = $pdo->prepare("DELETE FROM menu WHERE id = ?");
-        $stmt->execute([$id]);
+        $pdo->beginTransaction();
 
-        responseOk(['ok' => true, 'message' => 'Menú eliminado correctamente']);
+        try {
+            // Desvincular el menú de los productos
+            $pdo->prepare("DELETE FROM producto_menu WHERE menu_id = ?")->execute([$id]);
+
+            // Quitar el menú de las mesas que lo tenían asignado
+            $pdo->prepare("UPDATE mesa SET menu_id = NULL WHERE menu_id = ?")->execute([$id]);
+
+            // Quitar la referencia en el histórico (la columna es nullable)
+            $pdo->prepare("UPDATE historico_mesa SET menu_id = NULL WHERE menu_id = ?")->execute([$id]);
+
+            $pdo->prepare("DELETE FROM menu WHERE id = ?")->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk(['ok' => true, 'message' => 'Menú eliminado y desvinculado de productos y mesas']);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            responseError('Error al eliminar el menú', 500, $e->getMessage());
+        }
     }
 
     if ($entity === 'productos' && $action === 'eliminar') {

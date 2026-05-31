@@ -794,10 +794,11 @@ export default function AdminView({ user, onBack, onSalir }) {
     try {
       setLoading(true);
       await eliminarMenu(item.id);
-      setMensaje("Menú eliminado correctamente.");
+      setMensaje("Menú eliminado correctamente. Los productos y mesas asociados han sido desvinculados.");
       setFormMenu(menuInicial);
       setModoCrearMenu(true);
-      await cargarMenus();
+      // Recargar menús Y productos (los productos pierden la asociación con este menú)
+      await Promise.all([cargarMenus(), cargarProductos(), cargarMesas()]);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -834,11 +835,11 @@ export default function AdminView({ user, onBack, onSalir }) {
     try {
       setLoading(true);
       await eliminarAlergeno(item.id);
-      setMensaje("Alérgeno eliminado correctamente.");
+      setMensaje("Alérgeno eliminado correctamente. Los productos asociados han sido desvinculados.");
       setFormAlergeno(alergenoInicial);
       setModoCrearAlergeno(true);
-
-      await cargarAlergenos();
+      // Recargar alérgenos Y productos (los productos pierden la asociación con este alérgeno)
+      await Promise.all([cargarAlergenos(), cargarProductos()]);
     } catch (err) {
       setError(err.message);
     } finally {
