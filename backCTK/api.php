@@ -15,7 +15,7 @@ error_reporting(0);
 
 header("Content-Type: application/json; charset=utf-8");
 
-// Respuesta vacía a peticiones preflight de CORS
+// Respuesta vacía a peticiones preflight de CORS (el .htaccess ya gestiona los headers CORS)
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
@@ -1401,9 +1401,9 @@ try {
     }
 
     /**
-     * terminar: libera la mesa sin borrar el histórico (a diferencia de 'cerrar').
-     * Solo resetea el estado y el código de acceso. El histórico queda intacto
-     * para consulta posterior.
+     * terminar: libera la mesa y sella el histórico de la sesión actual.
+     * Al marcar fecha_cierre en historico_mesa, los pedidos de esta sesión
+     * quedan archivados y no aparecerán en futuras sesiones de la misma mesa.
      */
     if ($entity === 'mesas' && $action === 'terminar') {
         $id = $input['id'] ?? null;
@@ -1425,33 +1425,51 @@ try {
             responseError('Mesa no encontrada', 404);
         }
 
-        $stmt = $pdo->prepare("
-        UPDATE mesa
-        SET
-            estado = 'libre',
-            num_comensales = 0,
-            menu_id = NULL,
-            codigo_acceso = NULL,
-            codigo_activo = 0,
-            codigo_generado_at = NULL
-        WHERE id = ?
-    ");
-        $stmt->execute([$id]);
+        $pdo->beginTransaction();
 
-        responseOk([
-            'ok' => true,
-            'message' => 'Mesa terminada correctamente',
-            'mesa' => [
-                'id' => (int)$mesa['id'],
-                'numero' => $mesa['numero'],
-                'estado' => 'libre',
-                'numComensales' => 0,
-                'menuId' => null,
-                'codigoAcceso' => null,
-                'codigoActivo' => 0,
-                'codigoGeneradoAt' => null
-            ]
-        ]);
+        try {
+            // Sellar los registros del histórico de la sesión actual para que
+            // no aparezcan en la próxima sesión de esta mesa
+            $pdo->prepare("
+                UPDATE historico_mesa
+                SET fecha_cierre = NOW()
+                WHERE mesa_id = ? AND fecha_cierre IS NULL
+            ")->execute([$id]);
+
+            $pdo->prepare("
+                UPDATE mesa
+                SET
+                    estado = 'libre',
+                    num_comensales = 0,
+                    menu_id = NULL,
+                    codigo_acceso = NULL,
+                    codigo_activo = 0,
+                    codigo_generado_at = NULL
+                WHERE id = ?
+            ")->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk([
+                'ok' => true,
+                'message' => 'Mesa terminada correctamente',
+                'mesa' => [
+                    'id' => (int)$mesa['id'],
+                    'numero' => $mesa['numero'],
+                    'estado' => 'libre',
+                    'numComensales' => 0,
+                    'menuId' => null,
+                    'codigoAcceso' => null,
+                    'codigoActivo' => 0,
+                    'codigoGeneradoAt' => null
+                ]
+            ]);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            responseError('Error al terminar la mesa', 500, $e->getMessage());
+        }
     }
 
 
@@ -1483,7 +1501,7 @@ try {
             p.updated_at
         FROM historico_mesa hm
         LEFT JOIN pedido p ON p.id = hm.pedido_id
-        WHERE hm.mesa_id = ?
+        WHERE hm.mesa_id = ? AND hm.fecha_cierre IS NULL
         ORDER BY hm.fecha_apertura DESC, hm.id DESC
     ");
         $stmt->execute([$mesaId]);
@@ -1547,6 +1565,86 @@ try {
         ]);
     }
 
+    // ── ELIMINACIONES ─────────────────────────────────────────────────────────
+
+    if ($entity === 'mesas' && $action === 'eliminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de mesa obligatorio');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM mesa WHERE id = ?");
+        $stmt->execute([$id]);
+
+        responseOk(['ok' => true, 'message' => 'Mesa eliminada correctamente']);
+    }
+
+    if ($entity === 'categorias' && $action === 'eliminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de categoría obligatorio');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM categoria WHERE id = ?");
+        $stmt->execute([$id]);
+
+        responseOk(['ok' => true, 'message' => 'Categoría eliminada correctamente']);
+    }
+
+    if ($entity === 'alergenos' && $action === 'eliminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de alérgeno obligatorio');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM alergeno WHERE id = ?");
+        $stmt->execute([$id]);
+
+        responseOk(['ok' => true, 'message' => 'Alérgeno eliminado correctamente']);
+    }
+
+    if ($entity === 'menus' && $action === 'eliminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de menú obligatorio');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM menu WHERE id = ?");
+        $stmt->execute([$id]);
+
+        responseOk(['ok' => true, 'message' => 'Menú eliminado correctamente']);
+    }
+
+    if ($entity === 'productos' && $action === 'eliminar') {
+        $id = $input['id'] ?? null;
+
+        if (!$id) {
+            responseError('ID de producto obligatorio');
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            // Borrar relaciones en tablas intermedias antes de borrar el producto
+            $pdo->prepare("DELETE FROM producto_alergeno WHERE producto_id = ?")->execute([$id]);
+            $pdo->prepare("DELETE FROM producto_menu WHERE producto_id = ?")->execute([$id]);
+            $pdo->prepare("DELETE FROM producto WHERE id = ?")->execute([$id]);
+
+            $pdo->commit();
+
+            responseOk(['ok' => true, 'message' => 'Producto eliminado correctamente']);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            responseError('Error al eliminar el producto', 500, $e->getMessage());
+        }
+    }
+
     /**
      * eliminar_pedido: permite a cocina eliminar un pedido terminado (estado 'listo').
      * Borra primero las líneas (FK) y luego el pedido. Transacción para atomicidad.
@@ -1604,6 +1702,87 @@ try {
             responseError('Error al eliminar el pedido', 500, $e->getMessage());
         }
     }
+    // ── COBROS / HISTÓRICO TERMINADO ──────────────────────────────────────────
+
+    /**
+     * listar_terminados: devuelve las sesiones cerradas (fecha_cierre IS NOT NULL)
+     * agrupadas por mesa y fecha de cierre. Incluye el total de productos, el
+     * coste del menú si lo había, y si ya está marcada como pagada.
+     */
+    if ($entity === 'historico' && $action === 'listar_terminados') {
+        $stmt = $pdo->prepare("
+            SELECT
+                hm.mesa_id,
+                m.numero          AS mesa_numero,
+                hm.fecha_cierre,
+                hm.menu_id,
+                mn.nombre         AS menu_nombre,
+                mn.coste          AS menu_coste,
+                MAX(hm.num_comensales) AS num_comensales,
+                SUM(hm.total_facturado) AS total_productos,
+                MIN(hm.pagado)    AS pagado,
+                COUNT(hm.id)      AS num_pedidos
+            FROM historico_mesa hm
+            INNER JOIN mesa m ON m.id = hm.mesa_id
+            LEFT JOIN menu mn ON mn.id = hm.menu_id
+            WHERE hm.fecha_cierre IS NOT NULL
+            GROUP BY hm.mesa_id, hm.fecha_cierre, hm.menu_id, m.numero, mn.nombre, mn.coste
+            ORDER BY hm.fecha_cierre DESC
+        ");
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $sesiones = array_map(function ($r) {
+            $numComensales = (int)$r['num_comensales'];
+            $costeMenu     = (float)($r['menu_coste'] ?? 0);
+            $totalProductos = (float)$r['total_productos'];
+            $totalMenu     = $costeMenu * $numComensales;
+
+            return [
+                'mesaId'         => (int)$r['mesa_id'],
+                'mesaNumero'     => $r['mesa_numero'],
+                'fechaCierre'    => $r['fecha_cierre'],
+                'menuId'         => $r['menu_id'] !== null ? (int)$r['menu_id'] : null,
+                'menuNombre'     => $r['menu_nombre'],
+                'menuCoste'      => $costeMenu,
+                'numComensales'  => $numComensales,
+                'totalProductos' => $totalProductos,
+                'totalMenu'      => $totalMenu,
+                'total'          => $totalProductos + $totalMenu,
+                'numPedidos'     => (int)$r['num_pedidos'],
+                'pagado'         => (bool)(int)$r['pagado'],
+            ];
+        }, $rows);
+
+        responseOk(['ok' => true, 'sesiones' => $sesiones]);
+    }
+
+    /**
+     * marcar_pagado: actualiza el estado de pago de todos los registros
+     * de una sesión (identificada por mesa_id + fecha_cierre).
+     */
+    if ($entity === 'historico' && $action === 'marcar_pagado') {
+        $mesaId      = $input['mesaId'] ?? null;
+        $fechaCierre = trim($input['fechaCierre'] ?? '');
+        $pagado      = isset($input['pagado']) ? (int)(bool)$input['pagado'] : null;
+
+        if (!$mesaId || $fechaCierre === '' || $pagado === null) {
+            responseError('Datos incompletos');
+        }
+
+        $stmt = $pdo->prepare("
+            UPDATE historico_mesa
+            SET pagado = ?
+            WHERE mesa_id = ? AND fecha_cierre = ?
+        ");
+        $stmt->execute([$pagado, (int)$mesaId, $fechaCierre]);
+
+        responseOk([
+            'ok'      => true,
+            'message' => $pagado ? 'Marcado como pagado' : 'Marcado como pendiente',
+        ]);
+    }
+
     // Si ningún bloque coincidió con entity+action, se devuelve 404
     responseError('Ruta no válida', 404);
 } catch (Throwable $e) {

@@ -27,3 +27,10 @@ try {
     echo json_encode(['error' => 'Error de conexión a base de datos']);
     exit;
 }
+
+// Migración: añadir columna pagado si no existe todavía
+try {
+    $pdo->exec("ALTER TABLE historico_mesa ADD COLUMN pagado TINYINT(1) NOT NULL DEFAULT 0");
+} catch (PDOException $e) {
+    // La columna ya existe, no hacer nada
+}

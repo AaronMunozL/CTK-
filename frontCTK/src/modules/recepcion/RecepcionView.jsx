@@ -17,6 +17,8 @@ import {
   actualizarMesa,
   generarCodigoMesa,
   resetearCodigoMesa,
+  getHistorialTerminados,
+  marcarPagado,
 } from "../../api";
 
 const formInicial = {
@@ -32,13 +34,23 @@ const formInicial = {
 };
 
 export default function RecepcionView({ user, onSalir, onBack }) {
+  const [tab, setTab] = useState("mesas");
+
+  // ── Estado pestaña Mesas ──
   const [mesas, setMesas] = useState([]);
   const [form, setForm] = useState(formInicial);
   const [modoCrear, setModoCrear] = useState(false);
+  const [menus, setMenus] = useState([]);
+
+  // ── Estado pestaña Cobros ──
+  const [sesiones, setSesiones] = useState([]);
+  const [loadingCobros, setLoadingCobros] = useState(false);
+  const [filtroCobros, setFiltroCobros] = useState("pendientes"); // 'pendientes' | 'pagados' | 'todos'
+
+  // ── Estado compartido ──
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [menus, setMenus] = useState([]);
 
   const limpiarMensajes = () => {
     setMensaje("");
@@ -64,6 +76,18 @@ export default function RecepcionView({ user, onSalir, onBack }) {
     }
   };
 
+  const cargarCobros = async () => {
+    try {
+      setLoadingCobros(true);
+      const res = await getHistorialTerminados();
+      setSesiones(res.sesiones || []);
+    } catch (err) {
+      setError(err.message || "No se pudieron cargar los cobros.");
+    } finally {
+      setLoadingCobros(false);
+    }
+  };
+
   const cargarTodo = async () => {
     try {
       setLoading(true);
@@ -79,6 +103,11 @@ export default function RecepcionView({ user, onSalir, onBack }) {
   useEffect(() => {
     cargarTodo();
   }, []);
+
+  // Cargar cobros cuando se activa esa pestaña
+  useEffect(() => {
+    if (tab === "cobros") cargarCobros();
+  }, [tab]);
 
   const resumen = useMemo(() => {
     return {
@@ -270,6 +299,23 @@ export default function RecepcionView({ user, onSalir, onBack }) {
     }
   };
 
+  const handleMarcarPagado = async (sesion, pagado) => {
+    limpiarMensajes();
+    try {
+      await marcarPagado(sesion.mesaId, sesion.fechaCierre, pagado);
+      setMensaje(pagado ? "Sesión marcada como pagada." : "Sesión marcada como pendiente.");
+      await cargarCobros();
+    } catch (err) {
+      setError(err.message || "No se pudo actualizar el estado de pago.");
+    }
+  };
+
+  const sesionesFiltradas = useMemo(() => {
+    if (filtroCobros === "pendientes") return sesiones.filter((s) => !s.pagado);
+    if (filtroCobros === "pagados")    return sesiones.filter((s) => s.pagado);
+    return sesiones;
+  }, [sesiones, filtroCobros]);
+
   const colorEstado = (estado) => {
     if (estado === "libre") return "bg-emerald-100 text-emerald-700";
     if (estado === "ocupada") return "bg-amber-100 text-amber-700";
@@ -300,20 +346,22 @@ export default function RecepcionView({ user, onSalir, onBack }) {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={cargarTodo}
-              disabled={loading}
+              onClick={tab === "cobros" ? cargarCobros : cargarTodo}
+              disabled={loading || loadingCobros}
               className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? "Refrescando..." : "Refrescar"}
+              {loading || loadingCobros ? "Refrescando..." : "Refrescar"}
             </button>
 
-            <button
-              type="button"
-              onClick={nuevaMesa}
-              className="rounded-xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700"
-            >
-              Crear mesa
-            </button>
+            {tab === "mesas" && (
+              <button
+                type="button"
+                onClick={nuevaMesa}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700"
+              >
+                Crear mesa
+              </button>
+            )}
 
             {onBack && (
               <button
@@ -374,6 +422,144 @@ export default function RecepcionView({ user, onSalir, onBack }) {
           </div>
         )}
 
+        {/* ── Pestañas ── */}
+        <div className="mt-6 flex gap-2">
+          {[
+            { key: "mesas",  label: "Mesas" },
+            { key: "cobros", label: `Cobros${sesiones.filter(s => !s.pagado).length > 0 ? ` (${sesiones.filter(s => !s.pagado).length})` : ""}` },
+          ].map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                tab === t.key
+                  ? "bg-slate-900 text-white"
+                  : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Pestaña Cobros ── */}
+        {tab === "cobros" && (
+          <div className="mt-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Cobros pendientes</h2>
+                <p className="text-sm text-slate-500">Sesiones terminadas listas para cobrar</p>
+              </div>
+              <div className="flex gap-2">
+                {["pendientes", "pagados", "todos"].map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFiltroCobros(f)}
+                    className={`rounded-2xl px-3 py-2 text-sm font-semibold capitalize transition ${
+                      filtroCobros === f
+                        ? "bg-slate-900 text-white"
+                        : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {loadingCobros ? (
+              <div className="rounded-3xl bg-white p-8 text-center text-slate-500 shadow-sm ring-1 ring-slate-200">
+                Cargando cobros...
+              </div>
+            ) : sesionesFiltradas.length === 0 ? (
+              <div className="rounded-3xl bg-white p-8 text-center text-slate-500 shadow-sm ring-1 ring-slate-200">
+                No hay sesiones {filtroCobros === "pendientes" ? "pendientes de cobro" : filtroCobros === "pagados" ? "pagadas" : ""}.
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {sesionesFiltradas.map((sesion) => (
+                  <article
+                    key={`${sesion.mesaId}-${sesion.fechaCierre}`}
+                    className={`rounded-3xl p-6 shadow-sm ring-1 transition ${
+                      sesion.pagado
+                        ? "bg-emerald-50 ring-emerald-200"
+                        : "bg-white ring-slate-200"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-slate-500">Mesa</p>
+                        <p className="text-3xl font-black text-slate-900">{sesion.mesaNumero}</p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${
+                          sesion.pagado
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {sesion.pagado ? "Pagado" : "Pendiente"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 space-y-1 text-sm text-slate-600">
+                      <p>Cerrada: {new Date(sesion.fechaCierre).toLocaleString("es-ES")}</p>
+                      <p>Comensales: {sesion.numComensales}</p>
+                      {sesion.menuNombre && (
+                        <p>Menú: {sesion.menuNombre} ({Number(sesion.menuCoste).toFixed(2)} € × {sesion.numComensales})</p>
+                      )}
+                      <p>Pedidos: {sesion.numPedidos}</p>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl bg-slate-900 px-4 py-3 text-white">
+                      {sesion.menuNombre && (
+                        <div className="flex justify-between text-sm text-slate-300">
+                          <span>Productos</span>
+                          <span>{Number(sesion.totalProductos).toFixed(2)} €</span>
+                        </div>
+                      )}
+                      {sesion.menuNombre && (
+                        <div className="flex justify-between text-sm text-slate-300">
+                          <span>Menú</span>
+                          <span>{Number(sesion.totalMenu).toFixed(2)} €</span>
+                        </div>
+                      )}
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="font-semibold">Total</span>
+                        <span className="text-2xl font-black">{Number(sesion.total).toFixed(2)} €</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      {sesion.pagado ? (
+                        <button
+                          type="button"
+                          onClick={() => handleMarcarPagado(sesion, false)}
+                          className="w-full rounded-2xl bg-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-300"
+                        >
+                          Marcar como pendiente
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleMarcarPagado(sesion, true)}
+                          className="w-full rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                          Marcar como pagado ✓
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Pestaña Mesas ── */}
+        {tab === "mesas" && (
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="mb-4 flex items-center justify-between">
@@ -588,6 +774,7 @@ export default function RecepcionView({ user, onSalir, onBack }) {
             </form>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

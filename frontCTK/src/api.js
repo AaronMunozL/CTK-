@@ -10,9 +10,9 @@
  *   - payload: datos adicionales que se mezclan en el body JSON
  */
 
-// Ruta del proxy configurado en vite.config.js que apunta a backCTK/api.php
-const API_URL = "/api";
-// URL base del backend para construir rutas de imágenes en producción
+// URL directa al backend PHP (evita depender del proxy de Vite)
+const API_URL = "http://localhost/CTK/backCTK/api.php";
+// URL base del backend para construir rutas de imágenes
 const BACKEND_BASE_URL = "http://localhost/CTK/backCTK";
 
 /**
@@ -259,6 +259,21 @@ export async function eliminarPedidoCocina(id) {
 /** Devuelve el historial de pedidos de una mesa con todas sus líneas. */
 export async function getHistorialMesa(mesaId) {
   return apiRequest("historial_mesa", "pedidos", { mesaId });
+}
+
+// ── COBROS ────────────────────────────────────────────────────────────────────
+
+/** Devuelve todas las sesiones cerradas con su total y estado de pago. */
+export async function getHistorialTerminados() {
+  return apiRequest("listar_terminados", "historico");
+}
+
+/**
+ * Marca una sesión como pagada o pendiente.
+ * La sesión se identifica por mesaId + fechaCierre (devueltos por getHistorialTerminados).
+ */
+export async function marcarPagado(mesaId, fechaCierre, pagado) {
+  return apiRequest("marcar_pagado", "historico", { mesaId, fechaCierre, pagado });
 }
 
 // ── SUBIDA DE IMÁGENES ────────────────────────────────────────────────────────

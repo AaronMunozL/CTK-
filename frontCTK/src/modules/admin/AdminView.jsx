@@ -29,7 +29,6 @@ import {
   generarCodigoMesa,
   resetearCodigoMesa,
   subirImagenProducto,
-  subirImagenAlergeno,
   getImageUrl,
 } from "../../api";
 
@@ -56,7 +55,6 @@ const categoriaInicial = {
 const alergenoInicial = {
   id: null,
   nombre: "",
-  icono: "",
 };
 
 const productoInicial = {
@@ -128,11 +126,6 @@ export default function AdminView({ user, onBack, onSalir }) {
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const [previewImagen, setPreviewImagen] = useState("");
 
-  const alergenoFileInputRef = useRef(null);
-  const [alergenoFileInputKey, setAlergenoFileInputKey] = useState(Date.now() + 1);
-  const [isDraggingAlergeno, setIsDraggingAlergeno] = useState(false);
-  const [subiendoImagenAlergeno, setSubiendoImagenAlergeno] = useState(false);
-  const [previewImagenAlergeno, setPreviewImagenAlergeno] = useState("");
 
   const limpiarMensajes = () => {
     setError("");
@@ -200,9 +193,8 @@ export default function AdminView({ user, onBack, onSalir }) {
   useEffect(() => {
     return () => {
       if (previewImagen) URL.revokeObjectURL(previewImagen);
-      if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
     };
-  }, [previewImagen, previewImagenAlergeno]);
+  }, [previewImagen]);
 
   const resumen = useMemo(
     () => ({
@@ -314,13 +306,6 @@ export default function AdminView({ user, onBack, onSalir }) {
     setFileInputKey(Date.now());
   };
 
-  const limpiarImagenAlergeno = () => {
-    if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-    setPreviewImagenAlergeno("");
-    setFormAlergeno((prev) => ({ ...prev, icono: "" }));
-    if (alergenoFileInputRef.current) alergenoFileInputRef.current.value = "";
-    setAlergenoFileInputKey(Date.now());
-  };
 
   const procesarImagenProducto = async (file) => {
     if (!file) return;
@@ -351,34 +336,6 @@ export default function AdminView({ user, onBack, onSalir }) {
     }
   };
 
-  const procesarImagenAlergeno = async (file) => {
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      setError("Solo se permiten archivos de imagen.");
-      return;
-    }
-
-    try {
-      limpiarMensajes();
-      setSubiendoImagenAlergeno(true);
-
-      if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-      const previewUrl = URL.createObjectURL(file);
-      setPreviewImagenAlergeno(previewUrl);
-
-      const res = await subirImagenAlergeno(file);
-      setFormAlergeno((prev) => ({
-        ...prev,
-        icono: res.imagen,
-      }));
-      setMensaje("Imagen del alérgeno subida correctamente.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSubiendoImagenAlergeno(false);
-    }
-  };
 
   const nuevaEntidad = (tipo) => {
     limpiarMensajes();
@@ -400,11 +357,7 @@ export default function AdminView({ user, onBack, onSalir }) {
 
     if (tipo === "alergeno") {
       setModoCrearAlergeno(true);
-      if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-      setPreviewImagenAlergeno("");
       setFormAlergeno(alergenoInicial);
-      if (alergenoFileInputRef.current) alergenoFileInputRef.current.value = "";
-      setAlergenoFileInputKey(Date.now());
     }
 
     if (tipo === "producto") {
@@ -456,18 +409,10 @@ export default function AdminView({ user, onBack, onSalir }) {
 
   const seleccionarAlergeno = (item) => {
     limpiarMensajes();
-
-    if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-    setPreviewImagenAlergeno("");
-
-    if (alergenoFileInputRef.current) alergenoFileInputRef.current.value = "";
-    setAlergenoFileInputKey(Date.now());
-
     setModoCrearAlergeno(false);
     setFormAlergeno({
       id: item.id,
       nombre: item.nombre,
-      icono: item.icono || "",
     });
   };
 
@@ -641,19 +586,12 @@ export default function AdminView({ user, onBack, onSalir }) {
 
       const payload = {
         nombre: formAlergeno.nombre.trim(),
-        icono: formAlergeno.icono.trim(),
       };
 
       if (modoCrearAlergeno) {
         await crearAlergeno(payload);
         setMensaje("Alérgeno creado correctamente.");
-
-        if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-        setPreviewImagenAlergeno("");
         setFormAlergeno(alergenoInicial);
-
-        if (alergenoFileInputRef.current) alergenoFileInputRef.current.value = "";
-        setAlergenoFileInputKey(Date.now());
       } else {
         await actualizarAlergeno({
           id: formAlergeno.id,
@@ -899,11 +837,6 @@ export default function AdminView({ user, onBack, onSalir }) {
       setMensaje("Alérgeno eliminado correctamente.");
       setFormAlergeno(alergenoInicial);
       setModoCrearAlergeno(true);
-
-      if (previewImagenAlergeno) URL.revokeObjectURL(previewImagenAlergeno);
-      setPreviewImagenAlergeno("");
-      if (alergenoFileInputRef.current) alergenoFileInputRef.current.value = "";
-      setAlergenoFileInputKey(Date.now());
 
       await cargarAlergenos();
     } catch (err) {
@@ -1361,74 +1294,7 @@ export default function AdminView({ user, onBack, onSalir }) {
             />
           </div>
 
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">Icono</label>
-            <input
-              type="text"
-              name="icono"
-              value={formAlergeno.icono}
-              onChange={handleAlergenoChange}
-              className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
-            />
-          </div>
 
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDraggingAlergeno(true);
-            }}
-            onDragLeave={() => setIsDraggingAlergeno(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setIsDraggingAlergeno(false);
-              const file = e.dataTransfer.files?.[0];
-              procesarImagenAlergeno(file);
-            }}
-            className={`rounded-2xl border-2 border-dashed p-4 text-center transition ${
-              isDraggingAlergeno
-                ? "border-slate-900 bg-slate-100"
-                : "border-slate-300 bg-slate-50"
-            }`}
-          >
-            <input
-              key={alergenoFileInputKey}
-              ref={alergenoFileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => procesarImagenAlergeno(e.target.files?.[0])}
-            />
-
-            <button
-              type="button"
-              onClick={() => alergenoFileInputRef.current?.click()}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              {subiendoImagenAlergeno ? "Subiendo..." : "Subir imagen"}
-            </button>
-
-            <p className="mt-2 text-sm text-slate-500">
-              Arrastra una imagen aquí o pulsa para seleccionar.
-            </p>
-
-            {(previewImagenAlergeno || formAlergeno.icono) && (
-              <div className="mt-4">
-                <img
-                  src={previewImagenAlergeno || getImageUrl(formAlergeno.icono)}
-                  alt="Preview alérgeno"
-                  className="mx-auto h-24 w-24 rounded-2xl object-cover ring-1 ring-slate-200"
-                />
-
-                <button
-                  type="button"
-                  onClick={limpiarImagenAlergeno}
-                  className="mt-3 rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700"
-                >
-                  Quitar imagen
-                </button>
-              </div>
-            )}
-          </div>
 
           <button
             type="submit"
@@ -1447,22 +1313,9 @@ export default function AdminView({ user, onBack, onSalir }) {
               key={item.id}
               className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200"
             >
-              <div className="flex items-center gap-4">
-                {item.icono ? (
-                  <img
-                    src={getImageUrl(item.icono)}
-                    alt={item.nombre}
-                    className="h-16 w-16 rounded-2xl object-cover ring-1 ring-slate-200"
-                  />
-                ) : (
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-200 text-xs text-slate-500">
-                    Sin imagen
-                  </div>
-                )}
-
+              <div className="flex items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <h4 className="text-base font-black text-slate-900">{item.nombre}</h4>
-                  <p className="truncate text-sm text-slate-500">{item.icono || "-"}</p>
                 </div>
               </div>
 
