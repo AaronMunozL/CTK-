@@ -156,16 +156,6 @@ El proyecto incluye:
 - Separación de responsabilidades entre frontend y backend.
 - Comunicación mediante API REST.
 
-## Capturas de pantalla
-
-Puedes añadir aquí imágenes de las vistas principales:
-
-```md
-
-
-
-```
-
 ## Autor
 
 **Aarón Muñoz**  
